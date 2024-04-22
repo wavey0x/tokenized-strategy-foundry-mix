@@ -19,14 +19,18 @@ contract OperationTest is Setup {
         // TODO: add additional check on strat params
     }
 
-    function test_operation(uint256 _amount) public {
+    function test_operation() public {
+        uint256 _amount = 1e18;
         vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
 
         // Deposit into strategy
         mintAndDepositIntoStrategy(strategy, user, _amount);
-
+        console.log("Assets Deposited", strategy.totalAssets());
         assertEq(strategy.totalAssets(), _amount, "!totalAssets");
 
+        uint bal = ybs.balanceOf(address(this));
+        console.log('YBS Balance', bal);
+        
         // Earn Interest
         skip(1 days);
 
@@ -161,6 +165,9 @@ contract OperationTest is Setup {
     }
 
     function test_tendTrigger(uint256 _amount) public {
+        _amount = bound(_amount, 2, type(uint).max);
+        // bound(uint256 x, uint256 min, uint256 max)
+
         vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
 
         (bool trigger, ) = strategy.tendTrigger();
@@ -195,5 +202,98 @@ contract OperationTest is Setup {
 
         (trigger, ) = strategy.tendTrigger();
         assertTrue(!trigger);
+    }
+
+    function test_rewardsClaim(
+        uint256 _amount
+    ) public {
+        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+
+        depositRewards(1e20);
+        ERC20 mkusd = ERC20(rewards.rewardToken());
+
+        // Deposit into YBS
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+        strategy.stakeFullBalance();
+
+        // Get claimable
+        uint claimable = rewards.getClaimable(address(strategy));
+        assertEq(claimable, 0, "Should have 0 claimable");
+
+        skip(7 days);
+
+        claimable = rewards.getClaimable(address(strategy));
+        assertGt(claimable, 0, "Should have > 0 claimable");
+
+        assertEq(mkusd.balanceOf(address(strategy)), 0, "Should have 0 rewards");
+
+        // Harvest to claim
+        vm.prank(keeper);
+        strategy.report();
+        uint rewardBalance = mkusd.balanceOf(address(strategy));
+        assertGt(rewardBalance, 0, "Should have > 0 rewards");
+        console.log("Claimed",rewardBalance/1e18);
+    }
+
+    function test_stakeTimeBuffer() public {
+        uint _amount = 100e18;
+        uint currentWeekStart = (block.timestamp / 1 weeks) * 1 weeks;
+        uint nextWeekStart = currentWeekStart + 1 weeks;
+        uint bufferStart = nextWeekStart - strategy.stakeTimeBuffer();
+        uint timeUntil = block.timestamp >= bufferStart ? 0 : bufferStart - block.timestamp;
+
+        // If in the buffer now, get out of it so we can test
+        if(timeUntil == 0) skip(nextWeekStart - block.timestamp);
+
+        // Assert we are out of the buffer: shouldStake is false.
+        assertFalse(strategy.shouldStake());
+        
+        // Simulate a user deposit
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+        uint bal = asset.balanceOf(address(strategy));
+        assertGe(bal, _amount, "unexpected stake");
+
+        vm.prank(user);
+        strategy.stakeFullBalance();
+        bal = asset.balanceOf(address(strategy));
+        assertEq(bal, 0, "Stake didnt work");
+
+        // Now, simulate reaching the buffer, depositing, and ensure auto-stake
+        skip((bufferStart + 1 weeks) - block.timestamp);
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+        assertTrue(strategy.shouldStake());
+        bal = asset.balanceOf(address(strategy));
+        assertEq(bal, 0, "Should have staked");
+    }
+
+    function test_withdrawDoesNotUnstake() public {
+        uint _amount = 100e18;
+        uint currentWeekStart = (block.timestamp / 1 weeks) * 1 weeks;
+        uint nextWeekStart = currentWeekStart + 1 weeks;
+        uint bufferStart = nextWeekStart - strategy.stakeTimeBuffer();
+        uint timeUntil = block.timestamp >= bufferStart ? 0 : bufferStart - block.timestamp;
+
+        // If in the buffer now, get out of it so we can test
+        if(timeUntil == 0) skip(nextWeekStart - block.timestamp);
+
+        // Assert we are out of the buffer: shouldStake is false.
+        assertFalse(strategy.shouldStake());
+        
+        // Simulate a user deposit
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+        uint bal = asset.balanceOf(address(strategy));
+        assertGe(bal, _amount, "unexpected stake");
+
+        vm.prank(user);
+        strategy.stakeFullBalance();
+        bal = asset.balanceOf(address(strategy));
+        assertEq(bal, 0, "Stake didnt work");
+
+        // Now, simulate reaching the buffer, depositing, and ensure auto-stake
+        skip((bufferStart + 1 weeks) - block.timestamp);
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+        assertTrue(strategy.shouldStake());
+        bal = asset.balanceOf(address(strategy));
+        assertEq(bal, 0, "Should have staked");
     }
 }

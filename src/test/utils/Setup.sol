@@ -5,6 +5,10 @@ import "forge-std/console.sol";
 import {ExtendedTest} from "./ExtendedTest.sol";
 
 import {Strategy, ERC20} from "../../Strategy.sol";
+import {YearnBoostedStaker} from "../../YBS/YearnBoostedStaker.sol";
+import {SingleTokenRewardDistributor} from "../../YBS/SingleTokenRewardDistributor.sol";
+import {IYearnBoostedStaker} from "../../interfaces/IYearnBoostedStaker.sol";
+import {IRewardsDistributor} from "../../interfaces/IRewardsDistributor.sol";
 import {IStrategyInterface} from "../../interfaces/IStrategyInterface.sol";
 
 // Inherit the events so they can be checked if desired.
@@ -19,6 +23,9 @@ interface IFactory {
 }
 
 contract Setup is ExtendedTest, IEvents {
+
+    uint256 mainnetFork;
+
     // Contract instances that we will use repeatedly.
     ERC20 public asset;
     IStrategyInterface public strategy;
@@ -45,11 +52,17 @@ contract Setup is ExtendedTest, IEvents {
     // Default profit max unlock time is set for 10 days
     uint256 public profitMaxUnlockTime = 10 days;
 
+    IYearnBoostedStaker public ybs;
+    IRewardsDistributor public rewards;
+
     function setUp() public virtual {
+        mainnetFork = vm.createFork(vm.envString("ETH_RPC_URL"));
+        vm.selectFork(mainnetFork);
+
         _setTokenAddrs();
 
         // Set asset
-        asset = ERC20(tokenAddrs["DAI"]);
+        asset = ERC20(tokenAddrs["YPRISMA"]);
 
         // Set decimals
         decimals = asset.decimals();
@@ -70,8 +83,28 @@ contract Setup is ExtendedTest, IEvents {
 
     function setUpStrategy() public returns (address) {
         // we save the strategy as a IStrategyInterface to give it the needed interface
+
+        ybs = IYearnBoostedStaker(address(new YearnBoostedStaker(
+            address(asset), 
+            4, // _max_stake_growth_weeks
+            0, // _start_time
+            management // owner
+        )));
+
+        rewards = IRewardsDistributor(address(new SingleTokenRewardDistributor(
+            ybs,
+            ERC20(tokenAddrs["MKUSD"])
+        )));
+
         IStrategyInterface _strategy = IStrategyInterface(
-            address(new Strategy(address(asset), "Tokenized Strategy"))
+            address(
+                new Strategy(
+                    address(asset), 
+                    "Tokenized Strategy",
+                    ybs,
+                    rewards
+                )
+            )
         );
 
         // set keeper
@@ -146,6 +179,18 @@ contract Setup is ExtendedTest, IEvents {
         strategy.setPerformanceFee(_performanceFee);
     }
 
+    function depositRewards(uint _amount) public {
+        // Deposit some rewards
+        deal(tokenAddrs["MKUSD"], address(this), _amount);
+        ERC20 mkusd = ERC20(tokenAddrs["MKUSD"]);
+        mkusd.approve(address(rewards), type(uint).max);
+        rewards.depositReward(_amount);
+        uint week = rewards.getWeek();
+        uint amtAtWeek = rewards.weeklyRewardAmount(week);
+        assertGt(amtAtWeek, 0, "Zero rewards");
+        assertEq(amtAtWeek, _amount, "Unmatching rewards");
+    }
+
     function _setTokenAddrs() internal {
         tokenAddrs["WBTC"] = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
         tokenAddrs["YFI"] = 0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e;
@@ -154,5 +199,9 @@ contract Setup is ExtendedTest, IEvents {
         tokenAddrs["USDT"] = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
         tokenAddrs["DAI"] = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
         tokenAddrs["USDC"] = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+        tokenAddrs["YPRISMA"] = 0xe3668873D944E4A949DA05fc8bDE419eFF543882;
+        tokenAddrs["YCRV"] = 0x27B5739e22ad9033bcBf192059122d163b60349D;
+        tokenAddrs["CRVUSD"] = 0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E;
+        tokenAddrs["MKUSD"] = 0x4591DBfF62656E7859Afe5e45f6f47D3669fBB28;
     }
 }
