@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GNU AGPLv3
 pragma solidity 0.8.18;
 
-import "../interfaces/IYearnBoostedStaker.sol";
+import "./IYearnBoostedStaker.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IRewardsDistributor {
@@ -18,6 +18,7 @@ interface IRewardsDistributor {
     event ClaimerApproved(address indexed account, address indexed claimer, bool approved);
 
     // Functions
+    function staker() external view returns (address);
     function rewardToken() external view returns (address);
     function depositReward(uint _amount) external;
     function depositRewardFrom(address _target, uint _amount) external;

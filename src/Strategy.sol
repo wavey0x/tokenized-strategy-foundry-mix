@@ -4,46 +4,57 @@ pragma solidity 0.8.18;
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IYearnBoostedStaker} from "./interfaces/IYearnBoostedStaker.sol";
-import {IRewardsDistributor} from "./interfaces/IRewardsDistributor.sol";
+import {IYearnBoostedStaker} from "./interfaces/ybs/IYearnBoostedStaker.sol";
+import {IRewardsDistributor} from "./interfaces/ybs/IRewardsDistributor.sol";
+import {ISwapper} from "./interfaces/utils/ISwapper.sol";
+
+interface IERC4626 {
+    function asset() external view returns (address);
+    function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
+}
 
 contract Strategy is BaseStrategy {
     using SafeERC20 for ERC20;
 
-    uint public stakeTimeBuffer = 1 days;
+    bool public bypassClaim;
+    uint256 public swapThreshold = 100e18;
     IYearnBoostedStaker public immutable ybs;
     IRewardsDistributor public immutable rewardsDistributor;
-    
+    ERC20 public immutable rewardToken;
+    address public immutable rewardTokenUnderlying;
+    ISwapper public swapper;
 
     constructor(
         address _asset,
         string memory _name,
         IYearnBoostedStaker _ybs,
-        IRewardsDistributor _rewardsDistributor
+        IRewardsDistributor _rewardsDistributor,
+        ISwapper _swapper
     ) BaseStrategy(_asset, _name) {
+        // Address validation
+        require(_ybs.MAX_STAKE_GROWTH_WEEKS() > 0, "Invalid staker");
+        require(_rewardsDistributor.staker() == address(_ybs), "Invalid rewards");
+        require(address(asset) == address(_swapper.tokenOut()), "Invalid rewards");
+        address _rewardToken = _rewardsDistributor.rewardToken();
+        address _rewardTokenUnderlying = IERC4626(_rewardToken).asset();
+        require(_rewardTokenUnderlying == address(_swapper.tokenIn()), "Invalid rewards");
+        
         ybs = _ybs;
         rewardsDistributor = _rewardsDistributor;
+        swapper = _swapper;
+        rewardToken = ERC20(_rewardToken);
+        rewardTokenUnderlying = _rewardTokenUnderlying;
+
         ERC20(asset).approve(address(ybs), type(uint).max);
+        ERC20(_rewardTokenUnderlying).approve(address(_swapper), type(uint).max);
     }
 
     function _deployFunds(uint256 _amount) internal override {
-        if(shouldStake()) stakeFullBalance();
-    }
-
-    function shouldStake() public view returns (bool) {
-        uint nextWeekStart = (block.timestamp / 1 weeks + 1) * 1 weeks;
-        return nextWeekStart - block.timestamp <= stakeTimeBuffer;
-    }
-
-    function stakeFullBalance() public {
-        ybs.deposit(balanceOfAsset());
+        ybs.deposit(_amount); // < 2 wei will revert
     }
     
     function _freeFunds(uint256 _amount) internal override {
-        uint balance = balanceOfAsset();
-        if(_amount >= balance) {
-            ybs.withdraw(_amount - balance, address(this));
-        }
+        ybs.withdraw(_amount, address(this)); // < 2 wei will revert
     }
 
     function _harvestAndReport()
@@ -51,41 +62,60 @@ contract Strategy is BaseStrategy {
         override
         returns (uint256 _totalAssets)
     {
-        uint balance = balanceOfAsset();
         if (!TokenizedStrategy.isShutdown()) {
-            rewardsDistributor.claim();
+            _claimAndSellRewards();
+            uint balance = balanceOfAsset();
             if (balance > 1) { // YBS min deposit size is 2 wei.
                 _deployFunds(balance);
-                balance = 0;
             }
         }
-        _totalAssets = stakedBalance() + balanceOfAsset();
+        _totalAssets = balanceOfStaked() + balanceOfAsset();
+    }
+
+    function _claimAndSellRewards() internal {
+        if (!bypassClaim) rewardsDistributor.claim();
+        uint256 rewardBalance = balanceOfReward();
+        if (rewardBalance > swapThreshold) {
+            rewardBalance = IERC4626(address(rewardToken))
+                .redeem(rewardBalance, address(this), address(this));
+            swapper.swap(rewardBalance);
+        }
     }
 
     function _emergencyWithdraw(uint256 _amount) internal override {
-        _amount = Math.min(_amount, stakedBalance());
+        _amount = Math.min(_amount, balanceOfStaked());
         if (_amount > 1) _freeFunds(_amount);
     }
 
     function approveRewardClaimer(address _claimer, bool _approved) external onlyManagement {
-        rewardsDistributor.approveClaimer(_claimer, true);
+        rewardsDistributor.approveClaimer(_claimer, _approved);
     }
 
-    /**
-     * @notice Configurable time setting for when user deposits should trigger full strategy balance to be staked.
-     * @dev This is intended to save gas for the typical user. Staking at the beginning of the week serves
-     *      no advantage over staking at the very end of the week. So our goal is to minimize the number of stake operations.
-    */
-    function setStakeTimeBuffer(uint _buffer) external onlyManagement {
-        require(_buffer <= 1 weeks, "Buffer > 1 week");
-        stakeTimeBuffer = _buffer;
+    function setBypassClaim(bool _bypass) external onlyManagement {
+        bypassClaim = _bypass;
+    }
+
+    function setSwapThreshold(uint256 _swapThreshold) external onlyManagement {
+        swapThreshold = _swapThreshold;
+    }
+
+    function upgradeSwapper(ISwapper _swapper) external onlyManagement {
+        require(_swapper.tokenOut() == address(asset), "Invalid Swapper");
+        require(_swapper.tokenIn() == rewardTokenUnderlying);
+        ERC20(rewardTokenUnderlying).approve(address(swapper), 0);
+        ERC20(rewardTokenUnderlying).approve(address(_swapper), type(uint).max);
+        swapper = _swapper;
+    }
+
+    function balanceOfStaked() public view returns (uint256) {
+        return ybs.balanceOf(address(this));
     }
 
     function balanceOfAsset() public view returns (uint256) {
         return ERC20(asset).balanceOf(address(this));
     }
 
-    function stakedBalance() public view returns (uint256) {
-        return ybs.balanceOf(address(this));
+    function balanceOfReward() public view returns (uint256) {
+        return rewardToken.balanceOf(address(this));
     }
 }

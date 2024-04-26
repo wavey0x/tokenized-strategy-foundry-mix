@@ -26,6 +26,7 @@ interface IYearnBoostedStaker {
     event OwnershipTransferred(address indexed newOwner);
 
     // Public and external functions
+    function MAX_STAKE_GROWTH_WEEKS() external view returns (uint);
     function START_TIME() external returns (uint);
     function getWeek() external returns (uint);
     function deposit(uint _amount) external returns (uint);

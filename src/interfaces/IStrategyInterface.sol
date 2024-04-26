@@ -2,10 +2,12 @@
 pragma solidity 0.8.18;
 
 import {IStrategy} from "@tokenized-strategy/interfaces/IStrategy.sol";
+import {ISwapper} from "./utils/ISwapper.sol";
 
 interface IStrategyInterface is IStrategy {
-    //TODO: Add your specific implementation interface in here.
-    function stakeFullBalance() external;
-    function shouldStake() external view returns (bool);
-    function stakeTimeBuffer() external view returns (uint);
+    function balanceOfStaked() external view returns (uint256);
+    function balanceOfAsset() external view returns (uint256);
+    function balanceOfReward() external view returns (uint256);
+    function swapThreshold() external view returns (uint256);
+    function upgradeSwapper(ISwapper) external; 
 }

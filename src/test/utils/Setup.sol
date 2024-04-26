@@ -5,11 +5,15 @@ import "forge-std/console.sol";
 import {ExtendedTest} from "./ExtendedTest.sol";
 
 import {Strategy, ERC20} from "../../Strategy.sol";
+import {Swapper} from "../../periphery/Swapper.sol";
 import {YearnBoostedStaker} from "../../YBS/YearnBoostedStaker.sol";
 import {SingleTokenRewardDistributor} from "../../YBS/SingleTokenRewardDistributor.sol";
-import {IYearnBoostedStaker} from "../../interfaces/IYearnBoostedStaker.sol";
-import {IRewardsDistributor} from "../../interfaces/IRewardsDistributor.sol";
+import {IYearnBoostedStaker} from "../../interfaces/ybs/IYearnBoostedStaker.sol";
+import {IRewardsDistributor} from "../../interfaces/ybs/IRewardsDistributor.sol";
+import {ISwapper} from "../../interfaces/utils/ISwapper.sol";
 import {IStrategyInterface} from "../../interfaces/IStrategyInterface.sol";
+import {ICurve} from "../../interfaces/curve/ICurve.sol";
+import {ICurveInt128} from "../../interfaces/curve/ICurveInt128.sol";
 
 // Inherit the events so they can be checked if desired.
 import {IEvents} from "@tokenized-strategy/interfaces/IEvents.sol";
@@ -29,6 +33,7 @@ contract Setup is ExtendedTest, IEvents {
     // Contract instances that we will use repeatedly.
     ERC20 public asset;
     IStrategyInterface public strategy;
+    ISwapper public swapper;
 
     mapping(string => address) public tokenAddrs;
 
@@ -79,6 +84,11 @@ contract Setup is ExtendedTest, IEvents {
         vm.label(management, "management");
         vm.label(address(strategy), "strategy");
         vm.label(performanceFeeRecipient, "performanceFeeRecipient");
+        vm.label(address(swapper), "swapper");
+        vm.label(address(rewards), "rewards");
+        vm.label(address(ybs), "ybs");
+        vm.label(swapper.pool1(), "pool1");
+        vm.label(swapper.pool2(), "pool2");
     }
 
     function setUpStrategy() public returns (address) {
@@ -93,7 +103,15 @@ contract Setup is ExtendedTest, IEvents {
 
         rewards = IRewardsDistributor(address(new SingleTokenRewardDistributor(
             ybs,
-            ERC20(tokenAddrs["MKUSD"])
+            ERC20(tokenAddrs["YVMKUSD"])
+        )));
+
+        swapper = ISwapper(address(new Swapper(
+            ERC20(tokenAddrs["MKUSD"]),   // token in
+            ERC20(asset),                 // token out
+            ICurve(0x9D8108DDD8aD1Ee89d527C0C9e928Cb9D2BBa2d3), // pool 1 mkusd/crvusd
+            ERC20(tokenAddrs["PRISMA"]),  // token out pool 1
+            ICurveInt128(0x69833361991ed76f9e8DBBcdf9ea1520fEbFb4a7) // pool 2 prisma/yprisma
         )));
 
         IStrategyInterface _strategy = IStrategyInterface(
@@ -102,7 +120,8 @@ contract Setup is ExtendedTest, IEvents {
                     address(asset), 
                     "Tokenized Strategy",
                     ybs,
-                    rewards
+                    rewards,
+                    swapper
                 )
             )
         );
@@ -181,9 +200,9 @@ contract Setup is ExtendedTest, IEvents {
 
     function depositRewards(uint _amount) public {
         // Deposit some rewards
-        deal(tokenAddrs["MKUSD"], address(this), _amount);
-        ERC20 mkusd = ERC20(tokenAddrs["MKUSD"]);
-        mkusd.approve(address(rewards), type(uint).max);
+        deal(tokenAddrs["YVMKUSD"], address(this), _amount);
+        ERC20 reward = ERC20(tokenAddrs["YVMKUSD"]);
+        reward.approve(address(rewards), type(uint).max);
         rewards.depositReward(_amount);
         uint week = rewards.getWeek();
         uint amtAtWeek = rewards.weeklyRewardAmount(week);
@@ -203,5 +222,8 @@ contract Setup is ExtendedTest, IEvents {
         tokenAddrs["YCRV"] = 0x27B5739e22ad9033bcBf192059122d163b60349D;
         tokenAddrs["CRVUSD"] = 0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E;
         tokenAddrs["MKUSD"] = 0x4591DBfF62656E7859Afe5e45f6f47D3669fBB28;
+        tokenAddrs["YVMKUSD"] = 0x04AeBe2e4301CdF5E9c57B01eBdfe4Ac4B48DD13;
+        tokenAddrs["CRV"] = 0xD533a949740bb3306d119CC777fa900bA034cd52;
+        tokenAddrs["PRISMA"] = 0xdA47862a83dac0c112BA89c6abC2159b95afd71C;
     }
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GNU AGPLv3
 pragma solidity 0.8.18;
-import "../../interfaces/IYearnBoostedStaker.sol";
+import "../../interfaces/ybs/IYearnBoostedStaker.sol";
 
 /**
     @title Week Start
