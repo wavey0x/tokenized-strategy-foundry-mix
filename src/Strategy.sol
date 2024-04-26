@@ -3,27 +3,31 @@ pragma solidity 0.8.18;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
+import {CustomStrategyTriggerBase} from "@periphery/ReportTrigger/CustomStrategyTriggerBase.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IYearnBoostedStaker} from "./interfaces/ybs/IYearnBoostedStaker.sol";
 import {IRewardsDistributor} from "./interfaces/ybs/IRewardsDistributor.sol";
 import {ISwapper} from "./interfaces/utils/ISwapper.sol";
+import {ICommonReportTrigger} from "./interfaces/ICommonReportTrigger.sol";
 
 interface IERC4626 {
     function asset() external view returns (address);
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
 }
 
-contract Strategy is BaseStrategy {
+contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     using SafeERC20 for ERC20;
 
     bool public bypassClaim;
     uint256 public swapThreshold = 100e18;
+    ISwapper public swapper;
     IYearnBoostedStaker public immutable ybs;
     IRewardsDistributor public immutable rewardsDistributor;
     ERC20 public immutable rewardToken;
     address public immutable rewardTokenUnderlying;
-    ISwapper public swapper;
-
+    ICommonReportTrigger public constant COMMON_REPORT_TRIGGER =
+        ICommonReportTrigger(0xD98C652f02E7B987e0C258a43BCa9999DF5078cF);
+    
     constructor(
         address _asset,
         string memory _name,
@@ -65,7 +69,7 @@ contract Strategy is BaseStrategy {
         if (!TokenizedStrategy.isShutdown()) {
             _claimAndSellRewards();
             uint balance = balanceOfAsset();
-            if (balance > 1) { // YBS min deposit size is 2 wei.
+            if (balance > 1) { // < 2 wei will revert on deposit
                 _deployFunds(balance);
             }
         }
@@ -105,6 +109,26 @@ contract Strategy is BaseStrategy {
         ERC20(rewardTokenUnderlying).approve(address(swapper), 0);
         ERC20(rewardTokenUnderlying).approve(address(_swapper), type(uint).max);
         swapper = _swapper;
+    }
+
+     /**
+     * @param _strategy The address of the strategy to check.
+     * @return . Bool representing if the strategy is ready to report.
+     * @return . Bytes with either the calldata or reason why False.
+     */
+    function reportTrigger(
+        address _strategy
+    ) external view override returns (bool, bytes memory) {
+        if (TokenizedStrategy.isShutdown()) return (false, bytes("Base fee too high"));
+
+        if (!COMMON_REPORT_TRIGGER.isCurrentBaseFeeAcceptable()) {
+            return (false, bytes("Shutdown"));
+        }
+        if (rewardsDistributor.getClaimable(address(this)) > 0) {
+            return (true, abi.encodeWithSelector(TokenizedStrategy.report.selector));
+        }
+
+        return (false, bytes("Nothing Claimable"));
     }
 
     function balanceOfStaked() public view returns (uint256) {
