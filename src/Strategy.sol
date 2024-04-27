@@ -54,11 +54,11 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     }
 
     function _deployFunds(uint256 _amount) internal override {
-        ybs.deposit(_amount); // < 2 wei will revert
+        ybs.stake(_amount); // < 2 wei will revert
     }
     
     function _freeFunds(uint256 _amount) internal override {
-        ybs.withdraw(_amount, address(this)); // < 2 wei will revert
+        ybs.unstake(_amount, address(this)); // < 2 wei will revert
     }
 
     function _harvestAndReport()
