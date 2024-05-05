@@ -231,7 +231,7 @@ contract OperationTest is Setup {
         // Harvest to claim
         vm.prank(keeper);
         strategy.report();
-        if(claimable <= strategy.swapThreshold()){
+        if(claimable <= strategy.swapThresholds().min){
             assertGt(strategy.balanceOfReward(), 0, "Should have > 0 rewards"); 
         }
         else{
