@@ -121,7 +121,9 @@ contract Setup is ExtendedTest, IEvents {
                     "Tokenized Strategy",
                     ybs,
                     rewards,
-                    swapper
+                    swapper,
+                    0,
+                    1_000_000e18
                 )
             )
         );
@@ -166,7 +168,7 @@ contract Setup is ExtendedTest, IEvents {
         uint256 _totalAssets,
         uint256 _totalDebt,
         uint256 _totalIdle
-    ) public {
+    ) public view {
         uint256 _assets = _strategy.totalAssets();
         uint256 _balance = ERC20(_strategy.asset()).balanceOf(
             address(_strategy)

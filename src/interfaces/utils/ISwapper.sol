@@ -1,10 +1,10 @@
 pragma solidity 0.8.18;
 
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20} from "@tokenized-strategy/BaseStrategy.sol";
 
 interface ISwapper {
-    function tokenIn() external view returns (address);
-    function tokenOut() external view returns (address);
+    function tokenIn() external view returns (ERC20);
+    function tokenOut() external view returns (ERC20);
     function tokenOutPool1() external view returns (address);
     function pool1() external view returns (address);
     function pool2() external view returns (address);

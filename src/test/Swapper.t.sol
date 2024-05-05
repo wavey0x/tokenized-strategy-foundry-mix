@@ -19,7 +19,7 @@ contract SwapperTest is Setup {
         super.setUp();
     }
 
-    function test_setupStrategyOK() public {
+    function test_setupStrategyOK() public view {
         console.log("address of strategy", address(strategy));
         assertTrue(address(0) != address(strategy));
         assertEq(strategy.asset(), address(asset));
@@ -28,11 +28,11 @@ contract SwapperTest is Setup {
         assertEq(strategy.keeper(), keeper);
     }
 
-    function test_correctAddresses() public {
+    function test_correctAddresses() public view {
         ICurve pool1 = ICurve(swapper.pool1());
         ICurveInt128 pool2 = ICurveInt128(swapper.pool2());
-        address tokenIn = swapper.tokenIn();
-        assertEq(tokenIn, pool1.coins(swapper.pool1InTokenIdx()));
+        ERC20 tokenIn = swapper.tokenIn();
+        assertEq(address(tokenIn), pool1.coins(swapper.pool1InTokenIdx()));
         assertEq(swapper.tokenOutPool1(), pool1.coins(swapper.pool1OutTokenIdx()));
     }
 
