@@ -21,7 +21,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     SwapThresholds public swapThresholds;
     ISwapper public swapper;
     bool public bypassClaim;
-    bool doMaxStake;
+    bool public bypassMaxStake;
     IYearnBoostedStaker public immutable ybs;
     IRewardsDistributor public immutable rewardsDistributor;
     ERC20 public immutable rewardToken;
@@ -101,7 +101,13 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         if (toSwap > st.min) {
             toSwap = Math.min(toSwap, st.max);
             uint256 profit = swapper.swap(toSwap);
-            if(profit > 1 && doMaxStake) ybs.stakeAsMaxWeighted(address(this), profit);
+            if(
+                profit > 1 && 
+                !bypassMaxStake &&
+                ybs.approvedWeightedStaker(address(this))
+            ) {
+                ybs.stakeAsMaxWeighted(address(this), profit);
+            }
         }
     }
 
@@ -114,9 +120,9 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         rewardsDistributor.approveClaimer(_claimer, _approved);
     }
 
-    function configureClaim(bool _bypass, bool _doMaxStake) external onlyManagement {
+    function configureClaim(bool _bypass, bool _bypassMaxStake) external onlyManagement {
         bypassClaim = _bypass;
-        doMaxStake = _doMaxStake;
+        bypassMaxStake = _bypassMaxStake;
     }
 
     function setSwapThresholds(uint256 _swapThresholdMin, uint256 _swapThresholdMax) external onlyManagement {

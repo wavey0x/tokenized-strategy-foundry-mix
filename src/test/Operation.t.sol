@@ -220,6 +220,15 @@ contract OperationTest is Setup {
         assertEq(claimable, 0, "Should have 0 claimable");
 
         skip(7 days);
+        console.log('Advanced to week:', rewards.getWeek());
+
+        uint globalBoost = utils.getGlobalActiveBoostMultiplier();
+        if (globalBoost == 0) {
+            rewards.pushRewards(rewards.getWeek() - 1);
+            console.log('Pushed rewards to week: ', rewards.getWeek());
+            skip(7 days);
+            console.log('Advanced to week:', rewards.getWeek());
+        }
 
         claimable = rewards.getClaimable(address(strategy));
         assertGt(claimable, 0, "Should have > 0 claimable");
@@ -227,6 +236,11 @@ contract OperationTest is Setup {
         assertEq(rewardToken.balanceOf(address(strategy)), 0, "Should have 0 rewards");
 
         uint256 stakedBalance = strategy.balanceOfStaked();
+
+        // Give strategy permission to stake with max boost
+        address owner = ybs.owner();
+        vm.prank(owner);
+        ybs.setWeightedStaker(address(strategy), true);
 
         // Harvest to claim
         vm.prank(keeper);

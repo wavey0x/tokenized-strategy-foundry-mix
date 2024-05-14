@@ -8,6 +8,7 @@ import {Strategy, ERC20} from "../../Strategy.sol";
 import {Swapper} from "../../periphery/Swapper.sol";
 import {YearnBoostedStaker} from "../../YBS/YearnBoostedStaker.sol";
 import {SingleTokenRewardDistributor} from "../../YBS/SingleTokenRewardDistributor.sol";
+import {YBSFactory} from "../../YBS/YBSFactory.sol";
 import {IYBSRegistry, IYBSFactory} from "../../interfaces/ybs/IYBSRegistry.sol";
 import {IYearnBoostedStaker} from "../../interfaces/ybs/IYearnBoostedStaker.sol";
 import {IRewardsDistributor} from "../../interfaces/ybs/IRewardsDistributor.sol";
@@ -66,8 +67,8 @@ contract Setup is ExtendedTest, IEvents {
         vm.selectFork(mainnetFork);
 
         _setTokenAddrs();
-        ERC20 usde = ERC20(0x4c9EDD5852cd905f086C759E8383e09bff1E68B3);
-        console.log('USDE total supply',usde.totalSupply());
+        asset = ERC20(tokenAddrs["YPRISMA"]);
+
         // Set asset
         asset = ERC20(tokenAddrs["YPRISMA"]);
 
@@ -95,9 +96,9 @@ contract Setup is ExtendedTest, IEvents {
 
     function setUpStrategy() public returns (address) {
         // we save the strategy as a IStrategyInterface to give it the needed interface
+        address gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
 
         IYBSRegistry registry = IYBSRegistry(0x262be1d31d0754399d8d5dc63B99c22146E9f738);
-        address gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
         vm.prank(gov);
         (address ybsAddress, address rewardsAddress, address utilsAddress) = registry.createNewDeployment(
             address(asset), 
@@ -105,6 +106,7 @@ contract Setup is ExtendedTest, IEvents {
             0, 
             tokenAddrs["YVMKUSD"]
         );
+
 
         ybs = IYearnBoostedStaker(ybsAddress);
         rewards = IRewardsDistributor(rewardsAddress);

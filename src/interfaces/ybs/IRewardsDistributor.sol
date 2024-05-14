@@ -35,4 +35,5 @@ interface IRewardsDistributor {
     function approveClaimer(address _claimer, bool _approved) external;
     function getWeek() external view returns (uint);
     function weeklyRewardAmount(uint) external view returns (uint);
+    function pushRewards(uint _week) external returns (bool);
 }
