@@ -13,7 +13,6 @@ interface IERC4626 {
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
 }
 
-
 contract SwapperTest is Setup {
     function setUp() public virtual override {
         super.setUp();
@@ -30,7 +29,6 @@ contract SwapperTest is Setup {
 
     function test_correctAddresses() public view {
         ICurve pool1 = ICurve(swapper.pool1());
-        ICurveInt128 pool2 = ICurveInt128(swapper.pool2());
         ERC20 tokenIn = swapper.tokenIn();
         assertEq(address(tokenIn), pool1.coins(swapper.pool1InTokenIdx()));
         assertEq(swapper.tokenOutPool1(), pool1.coins(swapper.pool1OutTokenIdx()));

@@ -9,7 +9,7 @@ contract OperationTest is Setup {
         super.setUp();
     }
 
-    function test_setupStrategyOK() public {
+    function test_setupStrategyOK() public view {
         console.log("address of strategy", address(strategy));
         assertTrue(address(0) != address(strategy));
         assertEq(strategy.asset(), address(asset));

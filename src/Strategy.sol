@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-pragma solidity 0.8.18;
+pragma solidity ^0.8.18;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
@@ -19,9 +19,9 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     using SafeERC20 for ERC20;
 
     SwapThresholds public swapThresholds;
-    bool public bypassClaim;
-    uint256 public swapThreshold = 100e18;
     ISwapper public swapper;
+    bool public bypassClaim;
+    bool doMaxStake;
     IYearnBoostedStaker public immutable ybs;
     IRewardsDistributor public immutable rewardsDistributor;
     ERC20 public immutable rewardToken;
@@ -46,7 +46,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         // Address validation
         require(_ybs.MAX_STAKE_GROWTH_WEEKS() > 0, "Invalid staker");
         require(_rewardsDistributor.staker() == address(_ybs), "Invalid rewards");
-        require(address(asset) == address(_swapper.tokenOut()), "Invalid rewards");
+        require(_asset == address(_swapper.tokenOut()), "Invalid rewards");
         ERC20 _rewardToken = ERC20(_rewardsDistributor.rewardToken());
         ERC20 _rewardTokenUnderlying = ERC20(IERC4626(address(_rewardToken)).asset());
         require(_rewardTokenUnderlying == _swapper.tokenIn(), "Invalid rewards");
@@ -57,7 +57,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         rewardToken = ERC20(_rewardToken);
         rewardTokenUnderlying = _rewardTokenUnderlying;
 
-        ERC20(asset).approve(address(ybs), type(uint).max);
+        ERC20(_asset).approve(address(_ybs), type(uint).max);
         _rewardTokenUnderlying.approve(address(_swapper), type(uint).max);
 
         _setSwapThresholds(_swapThresholdMin, _swapThresholdMax);
@@ -100,7 +100,8 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         SwapThresholds memory st = swapThresholds;
         if (toSwap > st.min) {
             toSwap = Math.min(toSwap, st.max);
-            swapper.swap(toSwap);
+            uint256 profit = swapper.swap(toSwap);
+            if(profit > 1 && doMaxStake) ybs.stakeAsMaxWeighted(address(this), profit);
         }
     }
 
@@ -113,8 +114,9 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         rewardsDistributor.approveClaimer(_claimer, _approved);
     }
 
-    function setBypassClaim(bool _bypass) external onlyManagement {
+    function configureClaim(bool _bypass, bool _doMaxStake) external onlyManagement {
         bypassClaim = _bypass;
+        doMaxStake = _doMaxStake;
     }
 
     function setSwapThresholds(uint256 _swapThresholdMin, uint256 _swapThresholdMax) external onlyManagement {
