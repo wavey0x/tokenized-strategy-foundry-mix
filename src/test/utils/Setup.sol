@@ -6,9 +6,6 @@ import {ExtendedTest} from "./ExtendedTest.sol";
 
 import {Strategy, ERC20} from "../../Strategy.sol";
 import {Swapper} from "../../periphery/Swapper.sol";
-import {YearnBoostedStaker} from "../../YBS/YearnBoostedStaker.sol";
-import {SingleTokenRewardDistributor} from "../../YBS/SingleTokenRewardDistributor.sol";
-import {YBSFactory} from "../../YBS/YBSFactory.sol";
 import {IYBSRegistry, IYBSFactory} from "../../interfaces/ybs/IYBSRegistry.sol";
 import {IYearnBoostedStaker} from "../../interfaces/ybs/IYearnBoostedStaker.sol";
 import {IRewardsDistributor} from "../../interfaces/ybs/IRewardsDistributor.sol";
