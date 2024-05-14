@@ -145,12 +145,11 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     }
 
      /**
-     * @param _strategy The address of the strategy to check.
      * @return . Bool representing if the strategy is ready to report.
      * @return . Bytes with either the calldata or reason why False.
      */
     function reportTrigger(
-        address _strategy
+        address
     ) external view override returns (bool, bytes memory) {
         if (TokenizedStrategy.isShutdown()) return (false, bytes("Shutdown"));
 
