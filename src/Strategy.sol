@@ -17,6 +17,7 @@ interface IERC4626 {
 contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     using SafeERC20 for ERC20;
 
+    address constant public gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
     SwapThresholds public swapThresholds;
     ISwapper public swapper;
     bool public bypassClaim;
@@ -135,6 +136,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     }
 
     function upgradeSwapper(ISwapper _swapper) external onlyManagement {
+        require(msg.sender == gov, "!authorized");
         require(_swapper.tokenOut() == asset, "Invalid Swapper");
         require(_swapper.tokenIn() == rewardTokenUnderlying);
         rewardTokenUnderlying.forceApprove(address(swapper), 0);
