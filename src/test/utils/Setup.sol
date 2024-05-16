@@ -97,12 +97,18 @@ contract Setup is ExtendedTest, IEvents {
 
         IYBSRegistry registry = IYBSRegistry(0x262be1d31d0754399d8d5dc63B99c22146E9f738);
         vm.prank(gov);
-        (address ybsAddress, address rewardsAddress, address utilsAddress) = registry.createNewDeployment(
-            address(asset), 
-            4, 
-            0, 
-            tokenAddrs["YVMKUSD"]
+
+        (address ybsAddress, address rewardsAddress, address utilsAddress) = registry.deployments(
+            address(asset)
         );
+        if (ybsAddress == address(0)){
+            (ybsAddress, rewardsAddress, utilsAddress) = registry.createNewDeployment(
+                address(asset), 
+                4, 
+                0, 
+                tokenAddrs["YVMKUSD"]
+            );
+        }
 
 
         ybs = IYearnBoostedStaker(ybsAddress);
@@ -125,7 +131,7 @@ contract Setup is ExtendedTest, IEvents {
                     ybs,
                     rewards,
                     swapper,
-                    0,
+                    1e18,
                     1_000_000e18
                 )
             )
