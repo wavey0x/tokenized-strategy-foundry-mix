@@ -60,7 +60,7 @@ contract SwapperTest is Setup {
             ICurveInt128(0x69833361991ed76f9e8DBBcdf9ea1520fEbFb4a7) // pool 2 prisma/yprisma
         )));
         // Upgrade swapper in strategy
-        vm.prank(management);
+        vm.prank(strategy.gov());
         strategy.upgradeSwapper(swapper2);
         
         // Test approvals are all correct

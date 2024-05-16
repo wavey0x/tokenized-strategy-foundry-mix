@@ -135,7 +135,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         swapThresholds.max = uint112(_swapThresholdMax);
     }
 
-    function upgradeSwapper(ISwapper _swapper) external onlyManagement {
+    function upgradeSwapper(ISwapper _swapper) external {
         require(msg.sender == gov, "!authorized");
         require(_swapper.tokenOut() == asset, "Invalid Swapper");
         require(_swapper.tokenIn() == rewardTokenUnderlying);
