@@ -119,8 +119,8 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         rewardsDistributor.approveClaimer(_claimer, _approved);
     }
 
-    function configureClaim(bool _bypass, bool _bypassMaxStake) external onlyManagement {
-        bypassClaim = _bypass;
+    function setBypasses(bool _bypassClaim, bool _bypassMaxStake) external onlyManagement {
+        bypassClaim = _bypassClaim;
         bypassMaxStake = _bypassMaxStake;
     }
 
