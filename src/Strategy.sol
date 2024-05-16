@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.18;
 
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
 import {CustomStrategyTriggerBase} from "@periphery/ReportTrigger/CustomStrategyTriggerBase.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -99,7 +98,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         
         if (toSwap == 0) return;
         if (toSwap > st.min) {
-            toSwap = Math.min(toSwap, st.max);
+            toSwap = min(toSwap, st.max);
             uint256 profit = swapper.swap(toSwap);
             if(
                 profit > 1 && 
@@ -112,7 +111,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     }
 
     function _emergencyWithdraw(uint256 _amount) internal override {
-        _amount = Math.min(_amount, balanceOfStaked());
+        _amount = min(_amount, balanceOfStaked());
         if (_amount > 1) _freeFunds(_amount);
     }
 
@@ -173,5 +172,9 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
 
     function balanceOfReward() public view returns (uint256) {
         return rewardToken.balanceOf(address(this));
+    }
+
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
     }
 }
