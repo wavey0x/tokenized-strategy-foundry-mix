@@ -159,14 +159,12 @@ contract YieldBasisStrategyFactory {
             _cryptopool
         );
 
-        // Deploy Gauge strategy (default to NULL swap type)
         YieldBasisGaugeStrategy gaugeStrat = new YieldBasisGaugeStrategy(
             _asset,
             _gaugeName,
             _ltToken,
             _gauge,
-            _cryptopool,
-            YieldBasisGaugeStrategy.SwapType.NULL
+            _cryptopool
         );
 
         ltStrategy = address(ltStrat);
@@ -261,20 +259,18 @@ contract YieldBasisStrategyFactory {
             _gauge,
             _cryptopool,
             _name,
-            defaultSwapRouter,
-            YieldBasisGaugeStrategy.SwapType.NULL
+            defaultSwapRouter
         );
     }
 
     /**
-     * @notice Deploy only Gauge strategy with custom swap router and type
+     * @notice Deploy only Gauge strategy with custom swap router
      * @param _asset Underlying asset
      * @param _ltToken Yield Basis LT contract
      * @param _gauge Liquidity Gauge contract
      * @param _cryptopool Curve cryptopool address
      * @param _name Strategy name
      * @param _swapRouter Custom swap router
-     * @param _swapType Initial swap type for YB tokens
      * @return gaugeStrategy Address of deployed strategy
      */
     function deployGaugeStrategy(
@@ -283,8 +279,7 @@ contract YieldBasisStrategyFactory {
         address _gauge,
         address _cryptopool,
         string memory _name,
-        address _swapRouter,
-        YieldBasisGaugeStrategy.SwapType _swapType
+        address _swapRouter
     ) public returns (address gaugeStrategy) {
         // Verify contracts match
         require(ILT(_ltToken).ASSET_TOKEN() == _asset, "LT asset mismatch");
@@ -299,8 +294,7 @@ contract YieldBasisStrategyFactory {
             _name,
             _ltToken,
             _gauge,
-            _cryptopool,
-            _swapType
+            _cryptopool
         );
 
         gaugeStrategy = address(strat);

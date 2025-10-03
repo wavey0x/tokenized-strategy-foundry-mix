@@ -127,8 +127,7 @@ contract YieldBasisSetup is Test {
             gauge,
             cryptopool,
             _name,
-            address(0), // No router initially
-            _swapType
+            address(0) // No router initially
         );
 
         YieldBasisGaugeStrategy strat = YieldBasisGaugeStrategy(deployed);

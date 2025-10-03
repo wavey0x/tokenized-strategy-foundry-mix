@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.18;
 
-import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
+import {ERC20} from "@tokenized-strategy/BaseStrategy.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 // Import interfaces for Yield Basis protocol
 import {ILT} from "./interfaces/yb/ILT.sol";
 import {ICurveCryptoPool} from "./interfaces/yb/ICurveCryptoPool.sol";
+import {IAuction} from "./interfaces/IAuction.sol";
+import {RewardsSwapper} from "./RewardsSwapper.sol";
+import {BaseHealthCheck} from "@periphery/Bases/HealthCheck/BaseHealthCheck.sol";
 
 /**
  * @title YieldBasisLTStrategy
@@ -23,7 +26,7 @@ import {ICurveCryptoPool} from "./interfaces/yb/ICurveCryptoPool.sol";
  * - Earns trading fees (net of dynamic admin fee)
  * - No token price exposure (yield is BTC-denominated)
  */
-contract YieldBasisLTStrategy is BaseStrategy {
+contract YieldBasisLTStrategy is BaseHealthCheck {
     using SafeERC20 for ERC20;
 
     // ===== IMMUTABLE STATE =====
@@ -37,6 +40,15 @@ contract YieldBasisLTStrategy is BaseStrategy {
     /// @notice Stablecoin used for debt (crvUSD)
     ERC20 public immutable stablecoin;
 
+    // ===== SWAP TYPE =====
+
+    enum SwapType {
+        NULL,      // No swap configured (token accumulates)
+        SWAP,      // Direct swap via router
+        AUCTION,   // Yearn Auction system
+        TF         // Trade Factory (not used in this strategy, for compatibility)
+    }
+
     // ===== CONFIGURATION =====
 
     /// @notice Maximum slippage for deposits (in basis points, e.g., 50 = 0.5%)
@@ -45,14 +57,38 @@ contract YieldBasisLTStrategy is BaseStrategy {
     /// @notice Maximum slippage for withdrawals (in basis points)
     uint256 public maxWithdrawSlippage;
 
+    /// @notice RewardsSwapper contract for direct DEX swaps
+    RewardsSwapper public rewardsSwapper;
+
+    /// @notice Auction contract for reward token sales
+    address public auction;
+
+    /// @notice Mapping for token address => swap type
+    mapping(address => SwapType) public swapType;
+
+    /// @notice Whether emergency withdraw has been completed and crvUSD fully sold to asset
+    bool public emergencyRecoveryCompleted;
+
+    /// @notice Mapping for token address => minimum amount to sell
+    mapping(address => uint256) public minAmountToSellMapping;
+
+    /// @notice All reward tokens managed by this strategy
+    address[] internal allRewardTokens;
+
     // ===== CONSTANTS =====
 
-    uint256 internal constant MAX_BPS = 10_000;
     uint256 internal constant PRECISION = 1e18;
 
     // ===== EVENTS =====
 
     event SlippageUpdated(uint256 depositSlippage, uint256 withdrawSlippage);
+    event RewardsSwapperUpdated(address swapper);
+    event AuctionUpdated(address auction);
+    event RewardTokenAdded(address indexed token, uint256 minAmountToSell, SwapType swapType);
+    event RewardTokenRemoved(address indexed token);
+    event SwapTypeUpdated(address indexed token, SwapType swapType);
+    event MinAmountToSellUpdated(address indexed token, uint256 minAmount);
+    event EmergencyRecoveryCompleted(bool emergencyRecoveryCompleted);
 
     // ===== CONSTRUCTOR =====
 
@@ -68,7 +104,7 @@ contract YieldBasisLTStrategy is BaseStrategy {
         string memory _name,
         address _ltToken,
         address _cryptopool
-    ) BaseStrategy(_asset, _name) {
+    ) BaseHealthCheck(_asset, _name) {
         ltToken = ILT(_ltToken);
         cryptopool = ICurveCryptoPool(_cryptopool);
         stablecoin = ERC20(ltToken.STABLECOIN());
@@ -82,6 +118,9 @@ contract YieldBasisLTStrategy is BaseStrategy {
 
         // Approve LT contract to spend asset
         asset.safeApprove(_ltToken, type(uint256).max);
+
+        // Add stablecoin as reward token since emergency_withdraw can return crvUSD
+        _addRewardToken(address(stablecoin), 1e18, SwapType.AUCTION);
     }
 
     // ===== REQUIRED OVERRIDES =====
@@ -103,6 +142,8 @@ contract YieldBasisLTStrategy is BaseStrategy {
      *    - Mints ybBTC shares to us
      */
     function _deployFunds(uint256 _amount) internal override {
+        if (TokenizedStrategy.isShutdown()) return;
+
         // 1) Calculate deposit parameters
         uint256 debtNeeded = _calculateDebtForDeposit(_amount);
         uint256 pricePerShare = ltToken.pricePerShare(); // we use pps which is non-manipulatable (uses oracle pricing)
@@ -163,29 +204,28 @@ contract YieldBasisLTStrategy is BaseStrategy {
      */
     function _harvestAndReport()
         internal
-        view
         override
         returns (uint256 _totalAssets)
     {
+        // if LT is killed then we block reports to explicitly ensure the position has been unwound
+        bool isKilled = ltToken.is_killed();
+        require(
+            !isKilled || (isKilled && emergencyRecoveryCompleted),
+            "LT is killed and emergency withdraw has not been completed"
+        );
+
+        // Sell any stablecoin balance (from emergency_withdraw)
+        uint256 stablecoinBalance = stablecoin.balanceOf(address(this));
+        if (stablecoinBalance > minAmountToSellMapping[address(stablecoin)]) {
+            _swapRewardForAsset(address(stablecoin), stablecoinBalance);
+        }
+
         // Calculate current balances
         uint256 ltBalance = ltToken.balanceOf(address(this));
         uint256 looseAssets = asset.balanceOf(address(this));
 
-        // Check if market is killed
-        if (ltToken.is_killed()) {
-            // In killed state, use emergency accounting
-            // Don't try to harvest, just report current convertible value
-
-            // Estimate withdrawable value using pricePerShare
-            uint256 ltValue = (ltBalance * ltToken.pricePerShare()) / PRECISION;
-            _totalAssets = ltValue + looseAssets;
-
-            return _totalAssets;
-        }
-
         // Normal operation: fees accrue automatically via LT price appreciation
         // No explicit harvest needed - yield is built into pricePerShare()
-
         // Convert LT tokens to asset value using pricePerShare
         // pricePerShare already accounts for accumulated trading fees
         uint256 ltValueInAsset =
@@ -196,71 +236,44 @@ contract YieldBasisLTStrategy is BaseStrategy {
 
     // ===== OPTIONAL OVERRIDES =====
 
-    /**
-     * @notice Return maximum withdrawable assets
-     * @param _owner Owner address (unused)
-     * @return Maximum withdrawable amount
-     * @dev Checks LT balance and potential illiquidity
-     */
-    function availableWithdrawLimit(address _owner)
-        public
-        view
-        override
-        returns (uint256)
-    {
-        _owner; // Silence unused parameter warning
-
-        // Get LT balance
-        uint256 ltBalance = ltToken.balanceOf(address(this));
-
-        // Check if killed
-        if (ltToken.is_killed()) {
-            // During killed state, withdrawals may be limited
-            // Return conservative estimate
-            return (ltBalance * ltToken.pricePerShare()) / PRECISION;
+    function availableWithdrawLimit(address /*_owner*/) public view override returns (uint256) {
+        if (ltToken.is_killed() && !emergencyRecoveryCompleted) {
+            return 0;
         }
+        return type(uint256).max;
+    }
 
-        // Normal operation
-        uint256 looseAssets = asset.balanceOf(address(this));
-
-        // Maximum we can withdraw from LT
-        uint256 maxFromLT = ltToken.preview_withdraw(ltBalance);
-
-        return maxFromLT + looseAssets;
+    function availableDepositLimit(address /*_owner*/) public view override returns (uint256) {
+        if (ltToken.is_killed()) {
+            return 0;
+        }
+        return type(uint256).max;
     }
 
     /**
-     * @notice Emergency withdraw when market is killed
-     * @param _amount Amount to attempt to withdraw
-     * @dev Uses emergency_withdraw which may require user to bring stables
-     *
-     * NOTE: In killed state with negative stables balance, emergency_withdraw
-     * may require bringing crvUSD to cover the shortfall. This implementation
-     * accepts whatever can be withdrawn without additional stables.
+     * @notice Emergency withdraw when killed
+     * @param _amount Amount to withdraw
      */
     function _emergencyWithdraw(uint256 _amount) internal override {
-        if (!ltToken.is_killed()) {
-            // Use normal withdrawal
-            _freeFunds(_amount);
-            return;
-        }
-
-        // Market is killed - use emergency withdrawal
         uint256 ltBalance = ltToken.balanceOf(address(this));
         if (ltBalance == 0) return;
 
+        // Calculate shares needed based on requested amount
         uint256 sharesToBurn = _calculateSharesToWithdraw(_amount, ltBalance);
+        if (sharesToBurn == 0) return;
+
+        // Clamp to our balance
         sharesToBurn = sharesToBurn > ltBalance ? ltBalance : sharesToBurn;
 
-        // Emergency withdraw returns (assets, stables)
-        // If stables < 0, we need to bring them (complex - may revert)
-        try ltToken.emergency_withdraw(
-            sharesToBurn, address(this), address(this)
-        ) returns (uint256, int256) {
-            // Success - withdrew what we could
-        } catch {
-            // If emergency withdraw fails (e.g., need to bring stables),
-            // leave funds in place. Management should handle manually.
+        // Step 2: Withdraw from LT. Emergency withdraw must be used when AMM is killed.
+        if (ltToken.is_killed()) {
+            ltToken.emergency_withdraw(sharesToBurn, address(this), address(this));
+        } else if (sharesToBurn > 0) {
+            uint256 expectedAssets = ltToken.pricePerShare() * sharesToBurn / PRECISION;
+            uint256 minAssets =
+                (expectedAssets * (MAX_BPS - maxWithdrawSlippage)) / MAX_BPS;
+            // Normal withdraw
+            ltToken.withdraw(sharesToBurn, minAssets, address(this));
         }
     }
 
@@ -284,6 +297,154 @@ contract YieldBasisLTStrategy is BaseStrategy {
         emit SlippageUpdated(_depositSlippage, _withdrawSlippage);
     }
 
+    /**
+     * @notice Set auction contract
+     * @param _auction Auction contract address
+     */
+    function setAuction(address _auction) external onlyManagement {
+        if (_auction != address(0)) {
+            require(IAuction(_auction).want() == address(asset), "wrong want");
+            require(
+                IAuction(_auction).receiver() == address(this),
+                "wrong receiver"
+            );
+        }
+        auction = _auction;
+
+        emit AuctionUpdated(_auction);
+    }
+
+    /**
+     * @notice Set RewardsSwapper contract
+     * @param _swapper RewardsSwapper contract address
+     * @dev Revokes approvals from old swapper and grants to new one
+     */
+    function setRewardsSwapper(address _swapper) external onlyManagement {
+        require(_swapper != address(0), "Zero address");
+
+        // Revoke approvals from old swapper for all reward tokens
+        address[] memory allTokens = allRewardTokens;
+        if (address(rewardsSwapper) != address(0)) {
+            for (uint256 i = 0; i < allTokens.length; i++) {
+                ERC20(allTokens[i]).forceApprove(address(rewardsSwapper), 0);
+            }
+        }
+
+        // Set new swapper
+        rewardsSwapper = RewardsSwapper(_swapper);
+
+        // Grant unlimited approvals to new swapper for all reward tokens
+        for (uint256 i = 0; i < allTokens.length; i++) {
+            ERC20(allTokens[i]).forceApprove(_swapper, type(uint256).max);
+        }
+
+        emit RewardsSwapperUpdated(_swapper);
+    }
+
+    /**
+     * @notice Set emergency recovery completed only when crvUSD is fully sold to asset
+     * @dev In extreme cases, LT.emergency_withdraw() must be used to recover assets.
+     *      Because this type of withdraw can break the position into BTC + crvUSD, and we do not have full control over it being called on our behalf,
+     *      we must explicitly mark "completed" once the crvUSD is fully sold back to asset. Otherwise the strategy will avoid syncing totalAssets to avoid reporting an artificial loss.
+     */
+    function setEmergencyRecoveryCompleted(bool _emergencyRecoveryCompleted) external onlyManagement {
+        emergencyRecoveryCompleted = _emergencyRecoveryCompleted;
+        emit EmergencyRecoveryCompleted(_emergencyRecoveryCompleted);
+    }
+
+    /**
+     * @notice Kick an auction for a specific reward token
+     * @param _token The reward token to auction
+     * @return auctionId The ID of the kicked auction
+     */
+    function kickAuction(
+        address _token
+    ) external onlyKeepers returns (uint256) {
+        require(swapType[_token] == SwapType.AUCTION, "!auction");
+        return _kickAuction(_token);
+    }
+
+    /**
+     * @notice Get all reward tokens managed by this strategy
+     * @return Array of reward token addresses
+     */
+    function getAllRewardTokens() external view returns (address[] memory) {
+        return allRewardTokens;
+    }
+
+    /**
+     * @notice Add a new reward token to manage
+     * @param _token The reward token address
+     * @param _minAmountToSell Minimum amount to sell
+     * @param _swapType The swap type for this token
+     */
+    function addRewardToken(
+        address _token,
+        uint256 _minAmountToSell,
+        SwapType _swapType
+    ) external onlyManagement {
+        _addRewardToken(_token, _minAmountToSell, _swapType);
+    }
+
+    /**
+     * @notice Remove a reward token from management
+     * @param _token The reward token address to remove
+     */
+    function removeRewardToken(address _token) external onlyManagement {
+        address[] memory _allRewardTokens = allRewardTokens;
+        uint256 _length = _allRewardTokens.length;
+
+        for (uint256 i; i < _length; ++i) {
+            if (_allRewardTokens[i] == _token) {
+                allRewardTokens[i] = _allRewardTokens[_length - 1];
+                allRewardTokens.pop();
+                break;
+            }
+        }
+
+        // Revoke approval from swapper
+        if (address(rewardsSwapper) != address(0)) {
+            ERC20(_token).forceApprove(address(rewardsSwapper), 0);
+        }
+
+        delete swapType[_token];
+        delete minAmountToSellMapping[_token];
+
+        emit RewardTokenRemoved(_token);
+    }
+
+    /**
+     * @notice Set the swap type for a specific reward token
+     * @param _token The reward token address
+     * @param _swapType The new swap type
+     */
+    function setSwapType(
+        address _token,
+        SwapType _swapType
+    ) external onlyManagement {
+        // Make sure we already have this token configured
+        require(
+            _swapType != SwapType.NULL && swapType[_token] != SwapType.NULL,
+            "!null"
+        );
+
+        swapType[_token] = _swapType;
+        emit SwapTypeUpdated(_token, _swapType);
+    }
+
+    /**
+     * @notice Set the minimum amount to sell for a specific token
+     * @param _token The token address
+     * @param _amount Minimum amount to sell
+     */
+    function setMinAmountToSellMapping(
+        address _token,
+        uint256 _amount
+    ) external onlyManagement {
+        minAmountToSellMapping[_token] = _amount;
+        emit MinAmountToSellUpdated(_token, _amount);
+    }
+
     // ===== INTERNAL HELPERS =====
 
     /**
@@ -301,23 +462,20 @@ contract YieldBasisLTStrategy is BaseStrategy {
         returns (uint256 debtAmount)
     {
         // Get pool balances to estimate LP mint
-        uint256 balance0 = cryptopool.balances(0); // crvUSD
-        uint256 balance1 = cryptopool.balances(1); // BTC
+        uint256 crvUsdBalance = cryptopool.balances(0); // crvUSD
+        uint256 btcBalance = cryptopool.balances(1); // BTC
 
         // For balanced liquidity add, we need equal USD values
-        // So debt (in USD, assuming crvUSD ≈ $1) should equal asset USD value
+        // So debt should equal asset USD value
 
-        // Simple approximation: debt = assetAmount × (balance0 / balance1)
+        // Simple approximation: debt = assetAmount * (crvUsdBalance / btcBalance)
         // This gives us the ratio of stables to BTC in the pool
-        if (balance1 > 0) {
-            debtAmount = (_assetAmount * balance0) / balance1;
+        if (btcBalance > 0) {
+            debtAmount = (_assetAmount * crvUsdBalance) / btcBalance;
         } else {
             // Fallback: assume 1:1 if pool empty (shouldn't happen)
             debtAmount = _assetAmount;
         }
-
-        // For first deposit, LT will optimize this internally
-        // For subsequent deposits, preview_deposit will validate
     }
 
     /**
@@ -342,5 +500,90 @@ contract YieldBasisLTStrategy is BaseStrategy {
         if (shares > _ltBalance) {
             shares = _ltBalance;
         }
+    }
+
+    /**
+     * @notice Add a reward token internally
+     * @param _token Token address
+     * @param _minAmountToSell Minimum amount to sell
+     * @param _swapType Swap type
+     */
+    function _addRewardToken(address _token, uint256 _minAmountToSell, SwapType _swapType) internal {
+        require(
+            _token != address(asset) && _token != address(ltToken),
+            "!allowed"
+        );
+
+        // Make sure we haven't already set a swap type for this asset
+        require(swapType[_token] == SwapType.NULL, "!exists");
+
+        // Shouldn't add an asset but set to null
+        require(_swapType != SwapType.NULL, "!null");
+
+        allRewardTokens.push(_token);
+        swapType[_token] = _swapType;
+
+        // If swapper is set, approve it for this token
+        if (address(rewardsSwapper) != address(0)) {
+            ERC20(_token).forceApprove(
+                address(rewardsSwapper),
+                type(uint256).max
+            );
+        }
+
+        minAmountToSellMapping[_token] = _minAmountToSell;
+
+        emit RewardTokenAdded(_token, _minAmountToSell, _swapType);
+    }
+
+    /**
+     * @notice Swap reward tokens for asset
+     * @param _token Reward token address
+     * @param _amount Amount of reward token to sell
+     * @return assetReceived Amount of asset received
+     * @dev Routes based on swapType mapping: NULL (no swap), SWAP (router), or AUCTION
+     */
+    function _swapRewardForAsset(address _token, uint256 _amount)
+        internal
+        returns (uint256 assetReceived)
+    {
+        if (_amount == 0 || swapType[_token] == SwapType.NULL) {
+            return 0;
+        }
+
+        if (swapType[_token] == SwapType.SWAP) {
+            // Use RewardsSwapper for DEX swaps
+            require(address(rewardsSwapper) != address(0), "Swapper not set");
+
+            // Execute swap through RewardsSwapper (minOut = 0 uses route default)
+            assetReceived = rewardsSwapper.swap(_token, _amount, 0);
+        } else if (swapType[_token] == SwapType.AUCTION) {
+            // Transfer to auction (settles asynchronously)
+            ERC20(_token).safeTransfer(auction, _amount);
+            return 0;
+        }
+
+        return assetReceived;
+    }
+
+    /**
+     * @dev Kick an auction for a given token
+     * @param _from The token being sold
+     */
+    function _kickAuction(address _from) internal returns (uint256) {
+        require(
+            _from != address(asset) && _from != address(ltToken),
+            "cannot kick"
+        );
+        require(auction != address(0), "Auction not set");
+
+        uint256 _balance = ERC20(_from).balanceOf(address(this));
+        require(
+            _balance > minAmountToSellMapping[_from],
+            "Not enough to sell"
+        );
+
+        ERC20(_from).safeTransfer(auction, _balance);
+        return IAuction(auction).kick(_from);
     }
 }
