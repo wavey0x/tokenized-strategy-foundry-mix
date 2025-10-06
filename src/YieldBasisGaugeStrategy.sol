@@ -54,6 +54,14 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         TF         // Trade Factory (not used in this strategy, for compatibility)
     }
 
+    /// @notice Reward token configuration (packed into single storage slot)
+    struct RewardTokenConfig {
+        SwapType swapType;           // uint8 - 1 byte
+        uint120 minAmountToSell;     // 15 bytes (supports up to ~1.3e36)
+        uint120 maxAmountToSell;     // 15 bytes
+        // Total: 31 bytes = 1 storage slot
+    }
+
     // ===== CONFIGURATION =====
 
     /// @notice Maximum slippage for deposits (in basis points)
@@ -68,14 +76,11 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     /// @notice Auction contract for reward token sales
     address public auction;
 
-    /// @notice Mapping for token address => swap type
-    mapping(address => SwapType) public swapType;
-
     /// @notice Whether emergency withdraw has been completed and crvUSD fully sold to asset
     bool public emergencyRecoveryCompleted;
 
-    /// @notice Mapping for token address => minimum amount to sell
-    mapping(address => uint256) public minAmountToSellMapping;
+    /// @notice Mapping of token address to reward configuration (packed in 1 slot)
+    mapping(address => RewardTokenConfig) public rewardTokenConfigs;
 
     /// @notice All reward tokens managed by this strategy
     address[] internal allRewardTokens;
@@ -92,10 +97,12 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     );
     event RewardsSwapperUpdated(address swapper);
     event AuctionUpdated(address auction);
-    event RewardTokenAdded(address indexed token, uint256 minAmountToSell, SwapType swapType);
-    event RewardTokenRemoved(address indexed token);
-    event SwapTypeUpdated(address indexed token, SwapType swapType);
-    event MinAmountToSellUpdated(address indexed token, uint256 minAmount);
+    event RewardTokenConfigured(
+        address indexed token,
+        SwapType swapType,
+        uint256 minAmountToSell,
+        uint256 maxAmountToSell
+    );
     event EmergencyRecoveryCompleted(bool emergencyRecoveryCompleted);
 
     // ===== CONSTRUCTOR =====
@@ -137,8 +144,8 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         ERC20(_ltToken).safeApprove(_gauge, type(uint256).max);
 
         // Add reward tokens. Include stablecoin since LP value can be returned as both BTC+crvUSD when AMM is killed.
-        _addRewardToken(address(ybToken), 1e18, SwapType.AUCTION);
-        _addRewardToken(address(stablecoin), 1e18, SwapType.AUCTION);
+        _addRewardToken(address(ybToken), 1e18, 100_000e18, SwapType.AUCTION);
+        _addRewardToken(address(stablecoin), 1e18, 100_000e18, SwapType.AUCTION);
     }
 
     // ===== REQUIRED OVERRIDES =====
@@ -176,6 +183,13 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
      * 2. Withdraw from LT (get asset back)
      */
     function _freeFunds(uint256 _amount) internal override {
+        bool isKilled = ltToken.is_killed();
+        require(
+            !isKilled
+            || (isKilled && emergencyRecoveryCompleted)
+            , "LT is killed and emergency withdraw has not been completed"
+        );
+
         // Step 1: Calculate gauge shares needed
         uint256 sharesToRedeem =
             _calculateGaugeSharesToWithdraw(_amount);
@@ -219,16 +233,13 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         bool isKilled = ltToken.is_killed();
         require(
             !isKilled || 
-            (isKilled && !emergencyRecoveryCompleted)
+            (isKilled && emergencyRecoveryCompleted)
             , "LT is killed and emergency withdraw has not been completed"
         );
 
         _harvestRewards();
-
-        // Calculate total assets
+        // Convert gauge shares -> LT -> asset value
         uint256 gaugeShares = gauge.balanceOf(address(this));
-
-        // Convert gauge shares → LT → asset value
         uint256 ltEquivalent = gauge.convertToAssets(gaugeShares);
         uint256 assetValue =
             (ltEquivalent * ltToken.pricePerShare()) / PRECISION;
@@ -245,10 +256,11 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
      */
     function _emergencyWithdraw(uint256 _amount) internal override {
         // Step 1: Unstake from gauge
-        requestedShares = _calculateGaugeSharesToWithdraw(_amount);
+        uint256 gaugeShares = gauge.balanceOf(address(this));
+        uint256 requestedShares = _calculateGaugeSharesToWithdraw(_amount);
         requestedShares = requestedShares > gaugeShares ? gaugeShares : requestedShares;
 
-        if (gaugeShares > 0) gauge.redeem(requestedShares, address(this), address(this));
+        if (requestedShares > 0) gauge.redeem(requestedShares, address(this), address(this));
         uint256 ltBalance = ltToken.balanceOf(address(this));
 
         if (ltBalance == 0) return;
@@ -268,7 +280,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     // ===== HARVEST FUNCTIONS =====
 
     /**
-     * @notice Harvest YB rewards and sell for asset
+     * @notice Harvest rewards and sell for asset
      * @dev Internal function called during _harvestAndReport
      */
     function _harvestRewards() internal {
@@ -276,10 +288,11 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
             address token = allRewardTokens[i];
             gauge.claim(token, address(this));
             uint256 amount = ERC20(token).balanceOf(address(this));
-            if (amount < minAmountToSellMapping[token]) {
-                continue;
+
+            RewardTokenConfig memory config = rewardTokenConfigs[token];
+            if (config.swapType != SwapType.NULL && amount > config.minAmountToSell) {
+                _swapRewardForAsset(token, amount);
             }
-            _swapRewardForAsset(token, amount);
         }
     }
 
@@ -287,30 +300,21 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
      * @notice Swap reward tokens for asset
      * @param _token Reward token address
      * @param _amount Amount of reward token to sell
-     * @return assetReceived Amount of asset received
-     * @dev Routes based on swapType mapping: NULL (no swap), SWAP (router), or AUCTION
+     * @dev Routes based on swapType: SWAP (router) or AUCTION
      */
     function _swapRewardForAsset(address _token, uint256 _amount)
         internal
-        returns (uint256 assetReceived)
     {
-        if (_amount == 0 || swapType[_token] == SwapType.NULL) {
-            return 0;
-        }
-
-        if (swapType[_token] == SwapType.SWAP) {
-            // Use RewardsSwapper for DEX swaps
+        RewardTokenConfig memory config = rewardTokenConfigs[_token];
+        if (config.swapType == SwapType.SWAP) {
             require(address(rewardsSwapper) != address(0), "Swapper not set");
-
-            // Execute swap through RewardsSwapper (minOut = 0 uses route default)
-            assetReceived = rewardsSwapper.swap(_token, _amount, 0);
-        } else if (swapType[_token] == SwapType.AUCTION) {
-            // Transfer to auction (settles asynchronously)
-            ERC20(_token).safeTransfer(auction, _amount);
-            return 0;
+            rewardsSwapper.swap(_token, _amount, 0); // min out = 0
         }
-
-        return assetReceived;
+        if (config.swapType == SwapType.AUCTION) {
+            address _auction = auction;
+            require(_auction != address(0), "Auction not set");
+            ERC20(_token).safeTransfer(auction, _amount);
+        }
     }
 
     // ===== MANAGEMENT FUNCTIONS =====
@@ -366,19 +370,18 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
      */
     function setRewardsSwapper(address _swapper) external onlyManagement() {
         require(_swapper != address(0), "Zero address");
+        address oldSwapper = address(rewardsSwapper);
+        rewardsSwapper = RewardsSwapper(_swapper);
 
         // Revoke approvals from old swapper for all reward tokens
         address[] memory allTokens = allRewardTokens;
-        if (address(rewardsSwapper) != address(0)) {
+        if (oldSwapper != address(0)) {
             for (uint256 i = 0; i < allTokens.length; i++) {
-                ERC20(allTokens[i]).forceApprove(address(rewardsSwapper), 0);
+                ERC20(allTokens[i]).forceApprove(oldSwapper, 0);
             }
         }
 
-        // Set new swapper
-        rewardsSwapper = RewardsSwapper(_swapper);
-
-        // Grant unlimited approvals to new swapper for all reward tokens
+        // Grant approvals to trusted new swapper for all reward tokens
         for (uint256 i = 0; i < allTokens.length; i++) {
             ERC20(allTokens[i]).forceApprove(_swapper, type(uint256).max);
         }
@@ -419,7 +422,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     function kickAuction(
         address _token
     ) external onlyKeepers returns (uint256) {
-        require(swapType[_token] == SwapType.AUCTION, "!auction");
+        require(rewardTokenConfigs[_token].swapType == SwapType.AUCTION, "!auction");
         return _kickAuction(_token);
     }
 
@@ -434,13 +437,16 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         );
         require(auction != address(0), "Auction not set");
 
-        uint256 _balance = ERC20(_from).balanceOf(address(this));
+        RewardTokenConfig memory config = rewardTokenConfigs[_from];
+        uint256 _amountToSell = ERC20(_from).balanceOf(address(this));
+        _amountToSell = _amountToSell > config.maxAmountToSell ? config.maxAmountToSell : _amountToSell;
+
         require(
-            _balance > minAmountToSellMapping[_from],
+            _amountToSell > config.minAmountToSell,
             "Not enough to sell"
         );
 
-        ERC20(_from).safeTransfer(auction, _balance);
+        ERC20(_from).safeTransfer(auction, _amountToSell);
         return IAuction(auction).kick(_from);
     }
 
@@ -453,32 +459,48 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     }
 
     /**
+     * @notice Get reward token configuration
+     * @param _token The reward token address
+     * @return config The packed reward token configuration
+     */
+    function getRewardTokenConfig(address _token) external view returns (RewardTokenConfig memory) {
+        return rewardTokenConfigs[_token];
+    }
+
+    /**
      * @notice Add a new reward token to manage
      * @param _token The reward token address
+     * @param _minAmountToSell Minimum amount to sell
+     * @param _maxAmountToSell Maximum amount to sell
      * @param _swapType The swap type for this token
      */
     function addRewardToken(
         address _token,
         uint256 _minAmountToSell,
+        uint256 _maxAmountToSell,
         SwapType _swapType
     ) external onlyManagement {
-        _addRewardToken(_token, _minAmountToSell, _swapType);
+        _addRewardToken(_token, _minAmountToSell, _maxAmountToSell, _swapType);
     }
 
-    function _addRewardToken(address _token, uint256 _minAmountToSell, SwapType _swapType) internal {
+    function _addRewardToken(address _token, uint256 _minAmountToSell, uint256 _maxAmountToSell, SwapType _swapType) internal {
         require(
-            _token != address(asset) && _token != address(ltToken),
+            _token != address(asset) && _token != address(ltToken) && _token != address(gauge),
             "!allowed"
         );
-
-        // Make sure we haven't already set a swap type for this asset
-        require(swapType[_token] == SwapType.NULL, "!exists");
-
-        // Shouldn't add an asset but set to null
+        require(rewardTokenConfigs[_token].swapType == SwapType.NULL, "Already added");
         require(_swapType != SwapType.NULL, "!null");
+        require(_minAmountToSell <= type(uint120).max, "Min amount too large");
+        // Clamp to max uint120
+        _maxAmountToSell = _maxAmountToSell > type(uint120).max ? type(uint120).max : _maxAmountToSell;
 
         allRewardTokens.push(_token);
-        swapType[_token] = _swapType;
+
+        rewardTokenConfigs[_token] = RewardTokenConfig({
+            swapType: _swapType,
+            minAmountToSell: uint120(_minAmountToSell),
+            maxAmountToSell: uint120(_maxAmountToSell)
+        });
 
         // If swapper is set, approve it for this token
         if (address(rewardsSwapper) != address(0)) {
@@ -487,10 +509,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
                 type(uint256).max
             );
         }
-
-        minAmountToSellMapping[_token] = _minAmountToSell;
-
-        emit RewardTokenAdded(_token, _minAmountToSell, _swapType);
+        emit RewardTokenConfigured(_token, _swapType, _minAmountToSell, _maxAmountToSell);
     }
 
     /**
@@ -500,56 +519,53 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     function removeRewardToken(address _token) external onlyManagement {
         address[] memory _allRewardTokens = allRewardTokens;
         uint256 _length = _allRewardTokens.length;
-
+        bool found = false;
         for (uint256 i; i < _length; ++i) {
             if (_allRewardTokens[i] == _token) {
+                found = true;
                 allRewardTokens[i] = _allRewardTokens[_length - 1];
                 allRewardTokens.pop();
                 break;
             }
         }
+        require(found, "Not a valid reward token");
 
         // Revoke approval from swapper
         if (address(rewardsSwapper) != address(0)) {
             ERC20(_token).forceApprove(address(rewardsSwapper), 0);
         }
 
-        delete swapType[_token];
-        delete minAmountToSellMapping[_token];
-
-        emit RewardTokenRemoved(_token);
+        // Clear config values
+        delete rewardTokenConfigs[_token];
+        emit RewardTokenConfigured(_token, SwapType.NULL, 0, 0);
     }
 
     /**
-     * @notice Set the swap type for a specific reward token
+     * @notice Update reward token configuration
      * @param _token The reward token address
-     * @param _swapType The new swap type
+     * @param _swapType The swap type (SWAP or AUCTION)
+     * @param _minAmountToSell Minimum amount to sell
+     * @param _maxAmountToSell Maximum amount to sell
      */
-    function setSwapType(
+    function updateRewardTokenConfig(
         address _token,
-        SwapType _swapType
+        SwapType _swapType,
+        uint256 _minAmountToSell,
+        uint256 _maxAmountToSell
     ) external onlyManagement {
-        // Make sure we already have this token configured
-        require(
-            _swapType != SwapType.NULL && swapType[_token] != SwapType.NULL,
-            "!null"
-        );
+        RewardTokenConfig memory config = rewardTokenConfigs[_token];
+        require(config.swapType != SwapType.NULL, "Token not configured");
+        require(_swapType != SwapType.NULL, "Invalid swap type");
+        require(_minAmountToSell <= type(uint120).max, "Min amount too large");
+        // Clamp to max uint120
+        _maxAmountToSell = _maxAmountToSell > type(uint120).max ? type(uint120).max : _maxAmountToSell;
 
-        swapType[_token] = _swapType;
-        emit SwapTypeUpdated(_token, _swapType);
-    }
+        config.swapType = _swapType;
+        config.minAmountToSell = uint120(_minAmountToSell);
+        config.maxAmountToSell = uint120(_maxAmountToSell);
 
-    /**
-     * @notice Set the minimum amount to sell for a specific token
-     * @param _token The token address
-     * @param _amount Minimum amount to sell
-     */
-    function setMinAmountToSellMapping(
-        address _token,
-        uint256 _amount
-    ) external onlyManagement {
-        minAmountToSellMapping[_token] = _amount;
-        emit MinAmountToSellUpdated(_token, _amount);
+        rewardTokenConfigs[_token] = config;
+        emit RewardTokenConfigured(_token, _swapType, _minAmountToSell, _maxAmountToSell);
     }
 
     // ===== INTERNAL HELPERS =====
