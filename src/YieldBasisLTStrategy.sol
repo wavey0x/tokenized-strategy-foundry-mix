@@ -53,7 +53,7 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
         SwapType swapType;           // uint8 - 1 byte
         uint120 minAmountToSell;     // 15 bytes (supports up to ~1.3e36)
         uint120 maxAmountToSell;     // 15 bytes
-        // Total: 31 bytes = 1 storage slot
+        bool shouldClaim;            // 1 byte
     }
 
     // ===== CONFIGURATION =====
@@ -88,7 +88,7 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
     event SlippageUpdated(uint256 depositSlippage, uint256 withdrawSlippage);
     event RewardsSwapperUpdated(address swapper);
     event AuctionUpdated(address auction);
-    event RewardTokenConfigured(address indexed token, SwapType swapType, uint256 minAmountToSell, uint256 maxAmountToSell);
+    event RewardTokenConfigured(address indexed token, SwapType swapType, uint256 minAmountToSell, uint256 maxAmountToSell, bool shouldClaim);
     event EmergencyRecoveryCompleted(bool emergencyRecoveryCompleted);
 
     // ===== CONSTRUCTOR =====
@@ -116,7 +116,7 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
 
         asset.safeApprove(_ltToken, type(uint256).max);
         // Add stablecoin as reward token since emergency_withdraw can return crvUSD
-        _addRewardToken(address(stablecoin), 1e18, 100_000e18, SwapType.AUCTION);
+        _addRewardToken(address(stablecoin), SwapType.AUCTION, 1e18, 100_000e18, false);
     }
 
     // ===== REQUIRED OVERRIDES =====
@@ -367,17 +367,19 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
     /**
      * @notice Add a new reward token to manage
      * @param _token The reward token address
-     * @param _minAmountToSell Minimum amount to sell
-     * @param _maxAmountToSell Maximum amount to sell
      * @param _swapType The swap type for this token
+     * @param _minAmountToSell Minimum amount to sell
+     * @param _maxAmountToSell Maximum amount to sell     
+     * @param _shouldClaim Whether reward is claimable from gauge
      */
     function addRewardToken(
         address _token,
+        SwapType _swapType,
         uint256 _minAmountToSell,
         uint256 _maxAmountToSell,
-        SwapType _swapType
+        bool _shouldClaim
     ) external onlyManagement {
-        _addRewardToken(_token, _minAmountToSell, _maxAmountToSell, _swapType);
+        _addRewardToken(_token, _swapType, _minAmountToSell, _maxAmountToSell, _shouldClaim);
     }
 
     /**
@@ -404,7 +406,7 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
         }
 
         delete rewardTokenConfigs[_token];
-        emit RewardTokenConfigured(_token, SwapType.NULL, 0, 0);
+        emit RewardTokenConfigured(_token, SwapType.NULL, 0, 0, false);
     }
 
     /**
@@ -413,12 +415,14 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
      * @param _swapType The swap type (SWAP or AUCTION)
      * @param _minAmountToSell Minimum amount to sell
      * @param _maxAmountToSell Maximum amount to sell
+     * @param _shouldClaim Whether reward is claimable from gauge
      */
     function updateRewardTokenConfig(
         address _token,
         SwapType _swapType,
         uint256 _minAmountToSell,
-        uint256 _maxAmountToSell
+        uint256 _maxAmountToSell,
+        bool _shouldClaim
     ) external onlyManagement {
         RewardTokenConfig memory config = rewardTokenConfigs[_token];
 
@@ -433,9 +437,9 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
         config.swapType = _swapType;
         config.minAmountToSell = uint120(_minAmountToSell);
         config.maxAmountToSell = uint120(_maxAmountToSell);
-
+        config.shouldClaim = _shouldClaim;
         rewardTokenConfigs[_token] = config;
-        emit RewardTokenConfigured(_token, _swapType, _minAmountToSell, _maxAmountToSell);
+        emit RewardTokenConfigured(_token, _swapType, _minAmountToSell, _maxAmountToSell, _shouldClaim);
     }
 
     // ===== INTERNAL HELPERS =====
@@ -502,7 +506,7 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
      * @param _maxAmountToSell Maximum amount to sell
      * @param _swapType Swap type
      */
-    function _addRewardToken(address _token, uint256 _minAmountToSell, uint256 _maxAmountToSell, SwapType _swapType) internal {
+    function _addRewardToken(address _token, SwapType _swapType,uint256 _minAmountToSell, uint256 _maxAmountToSell, bool _shouldClaim) internal {
         require(
             _token != address(asset) && _token != address(ltToken),
             "!allowed"
@@ -524,7 +528,8 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
         rewardTokenConfigs[_token] = RewardTokenConfig({
             swapType: _swapType,
             minAmountToSell: uint120(_minAmountToSell),
-            maxAmountToSell: uint120(_maxAmountToSell)
+            maxAmountToSell: uint120(_maxAmountToSell),
+            shouldClaim: _shouldClaim
         });
 
         // If swapper is set, approve it for this token
@@ -534,7 +539,7 @@ contract YieldBasisLTStrategy is BaseHealthCheck {
                 type(uint256).max
             );
         }
-        emit RewardTokenConfigured(_token, _swapType, _minAmountToSell, _maxAmountToSell);
+        emit RewardTokenConfigured(_token, _swapType, _minAmountToSell, _maxAmountToSell, _shouldClaim);
     }
 
     /**

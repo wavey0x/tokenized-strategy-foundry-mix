@@ -4,8 +4,7 @@ pragma solidity ^0.8.18;
 import "forge-std/console2.sol";
 import {Test} from "forge-std/Test.sol";
 
-import {Strategy, ERC20} from "../../Strategy.sol";
-import {StrategyFactory} from "../../StrategyFactory.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IStrategyInterface} from "../../interfaces/IStrategyInterface.sol";
 
 // Inherit the events so they can be checked if desired.
@@ -24,8 +23,6 @@ contract Setup is Test, IEvents {
     ERC20 public asset;
     IStrategyInterface public strategy;
 
-    StrategyFactory public strategyFactory;
-
     mapping(string => address) public tokenAddrs;
 
     // Addresses for different roles we will use repeatedly.
@@ -34,9 +31,6 @@ contract Setup is Test, IEvents {
     address public management = address(1);
     address public performanceFeeRecipient = address(3);
     address public emergencyAdmin = address(5);
-
-    // Address of the real deployed Factory
-    address public factory;
 
     // Integer variables that will be used repeatedly.
     uint256 public decimals;
@@ -58,42 +52,20 @@ contract Setup is Test, IEvents {
         // Set decimals
         decimals = asset.decimals();
 
-        strategyFactory = new StrategyFactory(
-            management,
-            performanceFeeRecipient,
-            keeper,
-            emergencyAdmin
-        );
-
         // Deploy strategy and set variables
         strategy = IStrategyInterface(setUpStrategy());
 
-        factory = strategy.FACTORY();
-
         // label all the used addresses for traces
         vm.label(keeper, "keeper");
-        vm.label(factory, "factory");
         vm.label(address(asset), "asset");
         vm.label(management, "management");
         vm.label(address(strategy), "strategy");
         vm.label(performanceFeeRecipient, "performanceFeeRecipient");
     }
 
-    function setUpStrategy() public returns (address) {
-        // we save the strategy as a IStrategyInterface to give it the needed interface
-        IStrategyInterface _strategy = IStrategyInterface(
-            address(
-                strategyFactory.newStrategy(
-                    address(asset),
-                    "Tokenized Strategy"
-                )
-            )
-        );
-
-        vm.prank(management);
-        _strategy.acceptManagement();
-
-        return address(_strategy);
+    function setUpStrategy() public virtual returns (address) {
+        // Override in child contracts to deploy specific strategy
+        revert("Must override setUpStrategy in child contract");
     }
 
     function depositIntoStrategy(
@@ -142,14 +114,16 @@ contract Setup is Test, IEvents {
     }
 
     function setFees(uint16 _protocolFee, uint16 _performanceFee) public {
-        address gov = IFactory(factory).governance();
+        // Get factory from the strategy
+        address factoryAddress = strategy.FACTORY();
+        address gov = IFactory(factoryAddress).governance();
 
         // Need to make sure there is a protocol fee recipient to set the fee.
         vm.prank(gov);
-        IFactory(factory).set_protocol_fee_recipient(gov);
+        IFactory(factoryAddress).set_protocol_fee_recipient(gov);
 
         vm.prank(gov);
-        IFactory(factory).set_protocol_fee_bps(_protocolFee);
+        IFactory(factoryAddress).set_protocol_fee_bps(_protocolFee);
 
         vm.prank(management);
         strategy.setPerformanceFee(_performanceFee);

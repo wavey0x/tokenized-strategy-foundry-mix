@@ -7,10 +7,15 @@ pragma solidity ^0.8.18;
  */
 library Constants {
     // Network
-    uint256 constant MAINNET_FORK_BLOCK = 21500000; // Recent block (adjust as needed)
 
     // Common Addresses
-    address constant CURVE_USD = 0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E;
+    address constant CRVUSD = 0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E;
+    
+    // DAO
+    address constant YB = 0x01791F726B4103694969820be083196cC7c045fF;
+    address constant VEYB = 0x8235c179E9e84688FBd8B12295EfC26834dAC211;
+    address constant GAUGE_CONTROLLER = 0x1Be14811A3a06F6aF4fA64310a636e1Df04c1c21;
+    address constant YB_FACTORY = 0x370a449FeBb9411c95bf897021377fe0B7D100c0;
 
     // === WBTC Market (0) ===
     address constant WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;

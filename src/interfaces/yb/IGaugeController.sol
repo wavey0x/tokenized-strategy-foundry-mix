@@ -30,6 +30,17 @@ interface IGaugeController {
     /// @return Gauge weight
     function gauge_weight(address gauge) external view returns (uint256);
 
+    function owner() external view returns (address);
+
+    /// @notice Get the time weight of a gauge
+    /// @param gauge Gauge address
+    /// @return Time weight
+    function time_weight(address gauge) external view returns (uint256);
+
+    /// @notice Add a gauge to the controller
+    /// @param gauge Gauge address
+    function add_gauge(address gauge) external;
+
     /// @notice Get adjusted gauge weight (with adjustment factor)
     /// @param gauge Gauge address
     /// @return Adjusted weight

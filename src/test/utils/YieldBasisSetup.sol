@@ -1,51 +1,50 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.18;
 
-import "forge-std/Test.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Setup, IStrategyInterface, ERC20} from "./Setup.sol";
 import {IStrategy} from "@tokenized-strategy/interfaces/IStrategy.sol";
 
 import {YieldBasisLTStrategy} from "../../YieldBasisLTStrategy.sol";
 import {YieldBasisGaugeStrategy} from "../../YieldBasisGaugeStrategy.sol";
 import {YieldBasisStrategyFactory} from "../../YieldBasisStrategyFactory.sol";
-import {Constants} from "../Constants.sol";
+import {Constants} from "./Constants.sol";
+import {ILT} from "src/interfaces/yb/ILT.sol";
+import {IGaugeController} from "src/interfaces/yb/IGaugeController.sol";
 
 /**
  * @title YieldBasisSetup
- * @notice Base test setup for Yield Basis strategies with mainnet forking
+ * @notice Abstract base test setup for Yield Basis strategies with shared tests
+ * @dev Both LT and Gauge strategies inherit from this to run all shared tests
  */
-contract YieldBasisSetup is Test {
-    // Strategies
-    YieldBasisLTStrategy public ltStrategy;
-    YieldBasisGaugeStrategy public gaugeStrategy;
+abstract contract YieldBasisSetup is Setup {
+    // Factory
     YieldBasisStrategyFactory public factory;
 
     // Market references
-    ERC20 public asset;
     address public ltToken;
     address public gauge;
     address public cryptopool;
 
-    // Actors
-    address public management;
-    address public keeper;
-    address public user;
-
-    // Test params
-    uint256 public minFuzzAmount;
-    uint256 public maxFuzzAmount;
+    // Test params (override Setup defaults for BTC decimals)
     uint256 public constant RELATIVE_APPROX = 1e3; // 0.1%
 
-    function setUp() public virtual {
-        // Use existing fork (created via --fork-url in command line)
+    /**
+     * @notice Abstract method that children must implement to deploy their specific strategy
+     * @return address of deployed strategy
+     */
+    function deployStrategy() internal virtual returns (address);
+
+    function setUp() public virtual override {
+        // Fork mainnet at specific block
+        vm.createSelectFork(vm.envString("ETH_RPC_URL"));
 
         // Setup accounts
         management = makeAddr("management");
         keeper = makeAddr("keeper");
         user = makeAddr("user");
 
-        // Deploy factory
-        factory = new YieldBasisStrategyFactory(address(0)); // No default router
+        // Deploy factory (no default swap router for tests)
+        factory = new YieldBasisStrategyFactory(address(0));
 
         // Set market (default to WBTC, override in specific tests)
         setMarket(
@@ -54,6 +53,39 @@ contract YieldBasisSetup is Test {
             Constants.WBTC_STAKER,
             Constants.WBTC_POOL
         );
+
+        // Add debt limit to LTs
+        vm.startPrank(ILT(Constants.WBTC_LT).admin());
+        deal(Constants.CRVUSD, Constants.YB_FACTORY, 1_000_000_000e18);
+        ILT(Constants.WBTC_LT).allocate_stablecoins(300_000_000e18);
+        ILT(Constants.CBBTC_LT).allocate_stablecoins(300_000_000e18);
+        ILT(Constants.TBTC_LT).allocate_stablecoins(300_000_000e18);
+        vm.stopPrank();
+
+        gauge = Constants.WBTC_STAKER;
+        IGaugeController gc = IGaugeController(Constants.GAUGE_CONTROLLER);
+        if (gc.time_weight(gauge) == 0) {
+            vm.prank(gc.owner());
+            gc.add_gauge(gauge);
+        }
+
+        // Deploy strategy using abstract method
+        strategy = IStrategyInterface(setUpStrategy());
+
+        // Label addresses for traces
+        vm.label(management, "management");
+        vm.label(keeper, "keeper");
+        vm.label(user, "user");
+        vm.label(address(strategy), "strategy");
+        vm.label(address(asset), "asset");
+        vm.label(performanceFeeRecipient, "performanceFeeRecipient");
+    }
+
+    /**
+     * @notice Override Setup's setUpStrategy to use child's deployStrategy
+     */
+    function setUpStrategy() public override returns (address) {
+        return deployStrategy();
     }
 
     /**
@@ -75,83 +107,9 @@ contract YieldBasisSetup is Test {
         cryptopool = _cryptopool;
 
         // Set test amounts based on asset decimals
-        uint256 decimals = asset.decimals();
+        decimals = asset.decimals();
         minFuzzAmount = 10 ** (decimals - 3); // 0.001 of asset
         maxFuzzAmount = 10 * 10 ** decimals; // 10 of asset
-    }
-
-    /**
-     * @notice Deploy LT strategy for current market
-     * @param _name Strategy name
-     * @return Deployed LT strategy
-     */
-    function deployLTStrategy(string memory _name)
-        internal
-        returns (YieldBasisLTStrategy)
-    {
-        address deployed = factory.deployLTStrategy(
-            address(asset),
-            ltToken,
-            cryptopool,
-            _name
-        );
-
-        YieldBasisLTStrategy strat = YieldBasisLTStrategy(deployed);
-
-        // Set management and keeper
-        vm.prank(address(factory));
-        IStrategy(address(strat)).setPendingManagement(management);
-
-        vm.prank(management);
-        IStrategy(address(strat)).acceptManagement();
-
-        vm.prank(management);
-        IStrategy(address(strat)).setKeeper(keeper);
-
-        return strat;
-    }
-
-    /**
-     * @notice Deploy Gauge strategy for current market
-     * @param _name Strategy name
-     * @param _swapType Initial swap type
-     * @return Deployed Gauge strategy
-     */
-    function deployGaugeStrategy(
-        string memory _name,
-        YieldBasisGaugeStrategy.SwapType _swapType
-    ) internal returns (YieldBasisGaugeStrategy) {
-        address deployed = factory.deployGaugeStrategy(
-            address(asset),
-            ltToken,
-            gauge,
-            cryptopool,
-            _name,
-            address(0) // No router initially
-        );
-
-        YieldBasisGaugeStrategy strat = YieldBasisGaugeStrategy(deployed);
-
-        // Set management and keeper
-        vm.prank(address(factory));
-        IStrategy(address(strat)).setPendingManagement(management);
-
-        vm.prank(management);
-        IStrategy(address(strat)).acceptManagement();
-
-        vm.prank(management);
-        IStrategy(address(strat)).setKeeper(keeper);
-
-        return strat;
-    }
-
-    /**
-     * @notice Deal asset tokens to an address
-     * @param _to Recipient address
-     * @param _amount Amount to deal
-     */
-    function dealAsset(address _to, uint256 _amount) internal {
-        deal(address(asset), _to, _amount);
     }
 
     /**
@@ -173,5 +131,192 @@ contract YieldBasisSetup is Test {
             emit log_named_uint("     Delta", delta);
             fail();
         }
+    }
+
+    // ===== SHARED TESTS (run on both LT and Gauge strategies) =====
+
+    function test_setupStrategyOK() public virtual {
+        assertTrue(address(0) != address(strategy));
+        assertEq(strategy.asset(), address(asset));
+        assertEq(strategy.management(), management);
+        assertEq(strategy.keeper(), keeper);
+    }
+
+    function test_operation(uint256 _amount) public virtual {
+        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+
+        // Deposit into strategy
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+
+        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
+
+        // Earn Interest
+        skip(1 days);
+
+        // Report profit
+        vm.prank(keeper);
+        (uint256 profit, uint256 loss) = strategy.report();
+
+        // Check return Values
+        assertGe(profit, 0, "!profit");
+        assertEq(loss, 0, "!loss");
+
+        skip(strategy.profitMaxUnlockTime());
+
+        uint256 balanceBefore = asset.balanceOf(user);
+
+        // Withdraw all funds
+        vm.prank(user);
+        strategy.redeem(_amount, user, user);
+
+        assertGe(
+            asset.balanceOf(user),
+            balanceBefore + _amount,
+            "!final balance"
+        );
+    }
+
+    function test_profitableReport(
+        uint256 _amount,
+        uint16 _profitFactor
+    ) public virtual {
+        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+        _profitFactor = uint16(bound(uint256(_profitFactor), 10, MAX_BPS));
+
+        // Deposit into strategy
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+
+        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
+
+        // Earn Interest
+        skip(1 days);
+
+        // Simulate earning interest
+        uint256 toAirdrop = (_amount * _profitFactor) / MAX_BPS;
+        airdrop(asset, address(strategy), toAirdrop);
+
+        // Report profit
+        vm.prank(keeper);
+        (uint256 profit, uint256 loss) = strategy.report();
+
+        // Check return Values
+        assertGe(profit, toAirdrop, "!profit");
+        assertEq(loss, 0, "!loss");
+
+        skip(strategy.profitMaxUnlockTime());
+
+        uint256 balanceBefore = asset.balanceOf(user);
+
+        // Withdraw all funds
+        vm.prank(user);
+        strategy.redeem(_amount, user, user);
+
+        assertGe(
+            asset.balanceOf(user),
+            balanceBefore + _amount,
+            "!final balance"
+        );
+    }
+
+    function test_profitableReport_withFees(
+        uint256 _amount,
+        uint16 _profitFactor
+    ) public virtual {
+        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+        _profitFactor = uint16(bound(uint256(_profitFactor), 10, MAX_BPS));
+
+        // Set protocol fee to 0 and perf fee to 10%
+        setFees(0, 1_000);
+
+        // Deposit into strategy
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+
+        assertEq(strategy.totalAssets(), _amount, "!totalAssets");
+
+        // Earn Interest
+        skip(1 days);
+
+        // Simulate earning interest
+        uint256 toAirdrop = (_amount * _profitFactor) / MAX_BPS;
+        airdrop(asset, address(strategy), toAirdrop);
+
+        // Report profit
+        vm.prank(keeper);
+        (uint256 profit, uint256 loss) = strategy.report();
+
+        // Check return Values
+        assertGe(profit, toAirdrop, "!profit");
+        assertEq(loss, 0, "!loss");
+
+        skip(strategy.profitMaxUnlockTime());
+
+        // Get the expected fee
+        uint256 expectedShares = (profit * 1_000) / MAX_BPS;
+
+        assertEq(strategy.balanceOf(performanceFeeRecipient), expectedShares);
+
+        uint256 balanceBefore = asset.balanceOf(user);
+
+        // Withdraw all funds
+        vm.prank(user);
+        strategy.redeem(_amount, user, user);
+
+        assertGe(
+            asset.balanceOf(user),
+            balanceBefore + _amount,
+            "!final balance"
+        );
+
+        vm.prank(performanceFeeRecipient);
+        strategy.redeem(
+            expectedShares,
+            performanceFeeRecipient,
+            performanceFeeRecipient
+        );
+
+        checkStrategyTotals(strategy, 0, 0, 0);
+
+        assertGe(
+            asset.balanceOf(performanceFeeRecipient),
+            expectedShares,
+            "!perf fee out"
+        );
+    }
+
+    function test_tendTrigger(uint256 _amount) public virtual {
+        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+
+        (bool trigger, ) = strategy.tendTrigger();
+        assertTrue(!trigger);
+
+        // Deposit into strategy
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+
+        (trigger, ) = strategy.tendTrigger();
+        assertTrue(!trigger);
+
+        // Skip some time
+        skip(1 days);
+
+        (trigger, ) = strategy.tendTrigger();
+        assertTrue(!trigger);
+
+        vm.prank(keeper);
+        strategy.report();
+
+        (trigger, ) = strategy.tendTrigger();
+        assertTrue(!trigger);
+
+        // Unlock Profits
+        skip(strategy.profitMaxUnlockTime());
+
+        (trigger, ) = strategy.tendTrigger();
+        assertTrue(!trigger);
+
+        vm.prank(user);
+        strategy.redeem(_amount, user, user);
+
+        (trigger, ) = strategy.tendTrigger();
+        assertTrue(!trigger);
     }
 }

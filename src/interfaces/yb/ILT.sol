@@ -97,4 +97,12 @@ interface ILT is IERC20 {
         address receiver,
         address owner
     ) external returns (uint256 asset_amount, int256 stables_amount);
+
+    /// @notice Allocate stablecoins to the LT
+    /// @param amount Amount of stablecoins to allocate
+    function allocate_stablecoins(uint256 amount) external;
+
+    /// @notice Get the admin address
+    /// @return Admin address
+    function admin() external view returns (address);
 }
