@@ -1,139 +1,234 @@
-# Tokenized Strategy Mix for Yearn V3 strategies
+# Yearn V3 Yield Basis Strategies
 
-This repo will allow you to write, test and deploy V3 "Tokenized Strategies" using [Foundry](https://book.getfoundry.sh/).
+Yearn V3 integration with Yield Basis protocol, providing leveraged BTC liquidity positions without impermanent loss.
 
-You will only need to override the three functions in Strategy.sol of `_deployFunds`, `_freeFunds` and `_harvestAndReport`. With the option to also override `_tend`, `_tendTrigger`, `availableDepositLimit`, `availableWithdrawLimit` and `_emergencyWithdraw` if desired.
+## Overview
 
-For a more complete overview of how the Tokenized Strategies work please visit the [TokenizedStrategy Repo](https://github.com/yearn/tokenized-strategy).
+This repository contains two complementary Yearn V3 strategies for the Yield Basis protocol:
 
-## How to start
+- **YBRouterStrategy**: Converts BTC → LT tokens and deposits into LT Vault
+- **YBGaugeStrategy**: Stakes LT tokens in gauges to earn YB emissions
+
+### Architecture
+
+```
+BTC Vault (User-Facing)
+    ↓
+YBRouterStrategy: BTC → LT → LT Vault
+    ↓
+LT Vault (Internal)
+    ↓
+YBGaugeStrategy: LT → Gauge Staking → YB Rewards
+```
+
+**Key Benefits**:
+- 2x leveraged BTC exposure without IL
+- Tracks BTC price 1:1
+- Earns Curve trading fees
+- Earns YB governance token emissions
+
+## Documentation
+
+- **[YIELD_BASIS_ARCHITECTURE.md](./YIELD_BASIS_ARCHITECTURE.md)** - Complete architecture guide
+  - Nested vault design
+  - Strategy implementations
+  - Deployment guide
+  - Testing guide
+
+- **[CLAUDE.md](./CLAUDE.md)** - General Yearn V3 strategy development guidelines
+
+---
+
+## Quick Start
 
 ### Requirements
 
-- First you will need to install [Foundry](https://book.getfoundry.sh/getting-started/installation).
-NOTE: If you are on a windows machine it is recommended to use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)
-- Install [Node.js](https://nodejs.org/en/download/package-manager/)
+- [Foundry](https://book.getfoundry.sh/getting-started/installation)
+- [Node.js](https://nodejs.org/en/download/package-manager/)
 
-### Clone this repository
+NOTE: If you are on a windows machine it is recommended to use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)
+
+### Clone & Install
 
 ```sh
 git clone --recursive https://github.com/yearn/tokenized-strategy-foundry-mix
-
 cd tokenized-strategy-foundry-mix
-
 yarn
 ```
 
-### Set your environment Variables
+### Environment Setup
 
-Use the `.env.example` template to create a `.env` file and store the environement variables. You will need to populate the `RPC_URL` for the desired network(s). RPC url can be obtained from various providers, including [Ankr](https://www.ankr.com/rpc/) (no sign-up required) and [Infura](https://infura.io/).
+1. Copy `.env.example` to `.env`
+2. Add your `ETH_RPC_URL` (e.g., from [Ankr](https://www.ankr.com/rpc/) or [Infura](https://infura.io/))
 
-Use .env file
+```sh
+cp .env.example .env
+# Edit .env and add your RPC URL
+```
 
-1. Make a copy of `.env.example`
-2. Add the value for `ETH_RPC_URL` and other example vars
-     NOTE: If you set up a global environment variable, that will take precedence.
-
-### Build the project
+### Build
 
 ```sh
 make build
 ```
 
-Run tests
+### Test
 
 ```sh
+# Run all tests
 make test
+
+# Run with traces (useful for debugging)
+make trace
+
+# Run specific test file
+make test-contract contract=GaugeStrategyTest
+
+# Generate coverage report
+make coverage
+make coverage-html  # Requires lcov
 ```
 
-## Strategy Writing
+## Contracts
 
-For a complete guide to creating a Tokenized Strategy please visit: https://docs.yearn.fi/developers/v3/strategy_writing_guide
+### Strategies
 
-NOTE: Compiler defaults to 8.23 but it can be adjusted in the foundry toml.
+- **YBRouterStrategy** (`src/YBRouterStrategy.sol`)
+  - Handles BTC → LT conversion with decimal scaling
+  - Manages vault deposits/withdrawals
+  - Slippage protection on LT operations
+
+- **YBGaugeStrategy** (`src/YBGaugeStrategy.sol`)
+  - Simple LT → Gauge staking
+  - Claims and sells YB rewards
+  - Supports auction or direct swap
+
+### Factory
+
+- **YBVaultFactory** (`src/YBVaultFactory.sol`)
+  - Deploys both strategy types
+  - Configures management, fees, keepers
+  - Tracks deployments
+
+### Supporting
+
+- **RewardsSwapper** (`src/RewardsSwapper.sol`)
+  - Direct DEX swaps for reward tokens
+  - Configurable routes per token
+
+## Deployment
+
+See [YIELD_BASIS_ARCHITECTURE.md - Deployment Guide](./YIELD_BASIS_ARCHITECTURE.md#deployment-guide) for complete deployment instructions.
+
+### Quick Deploy Steps
+
+1. Deploy YBVaultFactory
+2. For each BTC asset (WBTC, cbBTC, tBTC):
+   - Deploy LT Vault
+   - Deploy Gauge Strategy → attach to LT Vault
+   - Deploy BTC Vault
+   - Deploy Router Strategy → attach to BTC Vault
+
+## Supported Assets
+
+| Asset | LT Token | Gauge | Status |
+|-------|----------|-------|--------|
+| WBTC  | yb-WBTC  | WBTC Staker | ✅ Ready |
+| cbBTC | yb-cbBTC | cbBTC Staker | ✅ Ready |
+| tBTC  | yb-tBTC  | tBTC Staker | ✅ Ready |
 
 ## Testing
 
-Due to the nature of the BaseStrategy utilizing an external contract for the majority of its logic, the default interface for any tokenized strategy will not allow proper testing of all functions. Testing of your Strategy should utilize the pre-built [IStrategyInterface](https://github.com/yearn/tokenized-strategy-foundry-mix/blob/master/src/interfaces/IStrategyInterface.sol) to cast any deployed strategy through for testing, as seen in the Setup example. You can add any external functions that you add for your specific strategy to this interface to be able to test all functions with one variable.
+### Test Files
+- ✅ `GaugeStrategy.t.sol` - LT staking and rewards
+- 🚧 `RouterStrategy.t.sol` - BTC/LT conversion (TODO)
+- ✅ Factory deployment tests
+- ✅ Reward swapper tests
 
-Example:
+All tests run against mainnet fork for real contract compatibility.
 
+### Testing Tips
+
+Due to the permissionless nature of tokenized strategies, all tests are written without integration with any meta vault. The strategies utilize the ERC-4626 standard and can be plugged into any vault with the same `asset`.
+
+Example test pattern:
 ```solidity
 Strategy _strategy = new Strategy(asset, name);
-IStrategyInterface strategy =  IStrategyInterface(address(_strategy));
+IStrategyInterface strategy = IStrategyInterface(address(_strategy));
 ```
 
-Due to the permissionless nature of the tokenized Strategies, all tests are written without integration with any meta vault funding it. While those tests can be added, all V3 vaults utilize the ERC-4626 standard for deposit/withdraw and accounting, so they can be plugged in easily to any number of different vaults with the same `asset.`
+See [Foundry Testing Tips](https://book.getfoundry.sh/forge/tests.html) for more information.
 
-Tests run in fork environment, you need to complete the full installation and setup to be able to run these commands.
+## Security Considerations
 
-```sh
-make test
-```
+### Slippage Protection
+- Router strategy: 0.5% default on LT deposits/withdrawals
+- Accounts for Curve pool fees and dynamic admin fees
 
-Run tests with traces (very useful)
+### Emergency Procedures
+- LT can be "killed" by Yield Basis governance
+- `emergency_withdraw()` available when killed
+- Strategies block deposits/reports when killed
 
-```sh
-make trace
-```
+### Access Control
+- **Management**: Configuration changes
+- **Keeper**: Report triggers, auction kicking
+- **Emergency Admin**: Shutdown procedures
 
-Run specific test contract (e.g. `test/StrategyOperation.t.sol`)
+## Audit Status
 
-```sh
-make test-contract contract=StrategyOperationsTest
-```
+⚠️ **Not Yet Audited** - Do not use in production without audit.
 
-Run specific test contract with traces (e.g. `test/StrategyOperation.t.sol`)
+## CI/CD
 
-```sh
-make trace-contract contract=StrategyOperationsTest
-```
+This repo uses [GitHub Actions](.github/workflows):
+- **Lint**: Code style checks
+- **Test**: Full test suite on fork
+- **Slither**: Static analysis
+- **Coverage**: Test coverage reporting
 
-See here for some tips on testing [`Testing Tips`](https://book.getfoundry.sh/forge/tests.html)
+### Setup CI
+1. Add `ETH_RPC_URL` secret to GitHub repo
+2. Add `GH_TOKEN` for coverage PR comments (optional)
 
-When testing on chains other than mainnet you will need to make sure a valid `CHAIN_RPC_URL` for that chain is set in your .env. You will then need to simply adjust the variable that RPC_URL is set to in the Makefile to match your chain.
+See [GitHub Actions docs](https://docs.github.com/en/codespaces/managing-codespaces-for-your-organization/managing-encrypted-secrets-for-your-repository-and-organization-for-github-codespaces#adding-secrets-for-a-repository) for setup.
 
-To update to a new API version of the TokenizeStrategy you will need to simply remove and reinstall the dependency.
+### Suppress Slither Warnings
+Add comment before issue: `//slither-disable-next-line DETECTOR_NAME`
 
-### Test Coverage
+See [Slither Detector Docs](https://github.com/crytic/slither/wiki/Detector-Documentation) for detector names.
 
-Run the following command to generate a test coverage:
+## Contract Verification
 
-```sh
-make coverage
-```
+After deployment, verify TokenizedStrategy proxy functions:
 
-To generate test coverage report in HTML, you need to have installed [`lcov`](https://github.com/linux-test-project/lcov) and run:
+1. Navigate to contract on Etherscan
+2. Click "More Options" → "is this a proxy?"
+3. Click "Verify" → "Save"
 
-```sh
-make coverage-html
-```
+This adds external `TokenizedStrategy` functions to the contract interface.
 
-The generated report will be in `coverage-report/index.html`.
+## Resources
 
-### Deployment
+- [Yield Basis Documentation](https://docs.yieldbasis.com/)
+- [Yearn V3 Documentation](https://docs.yearn.fi/developers/v3/overview)
+- [Yearn V3 Strategy Writing Guide](https://docs.yearn.fi/developers/v3/strategy_writing_guide)
+- [TokenizedStrategy Repo](https://github.com/yearn/tokenized-strategy)
 
-#### Contract Verification
+## Contributing
 
-Once the Strategy is fully deployed and verified, you will need to verify the TokenizedStrategy functions. To do this, navigate to the /#code page on Etherscan.
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
-1. Click on the `More Options` drop-down menu
-2. Click "is this a proxy?"
-3. Click the "Verify" button
-4. Click "Save"
+## License
 
-This should add all of the external `TokenizedStrategy` functions to the contract interface on Etherscan.
+AGPL-3.0
 
-## CI
+## Support
 
-This repo uses [GitHub Actions](.github/workflows) for CI. There are three workflows: lint, test and slither for static analysis.
-
-To enable test workflow you need to add the `ETH_RPC_URL` secret to your repo. For more info see [GitHub Actions docs](https://docs.github.com/en/codespaces/managing-codespaces-for-your-organization/managing-encrypted-secrets-for-your-repository-and-organization-for-github-codespaces#adding-secrets-for-a-repository).
-
-If the slither finds some issues that you want to suppress, before the issue add comment: `//slither-disable-next-line DETECTOR_NAME`. For more info about detectors see [Slither docs](https://github.com/crytic/slither/wiki/Detector-Documentation).
-
-### Coverage
-
-If you want to use [`coverage.yml`](.github/workflows/coverage.yml) workflow on other chains than mainnet, you need to add the additional `CHAIN_RPC_URL` secret.
-
-Coverage workflow will generate coverage summary and attach it to PR as a comment. To enable this feature you need to add the [`GH_TOKEN`](.github/workflows/coverage.yml#L53) secret to your Github repo. Token must have permission to "Read and Write access to pull requests". To generate token go to [Github settings page](https://github.com/settings/tokens?type=beta). For more info see [GitHub Access Tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+For questions or issues:
+- Create a GitHub issue
+- Join Yearn Discord: https://discord.yearn.fi

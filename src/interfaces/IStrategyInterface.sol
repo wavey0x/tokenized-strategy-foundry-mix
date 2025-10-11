@@ -57,4 +57,6 @@ interface IStrategyInterface is IStrategy {
     ) external;
     function kickAuction(address _token) external returns (uint256);
     function claimRewards() external;
+    function setProfitLimitRatio(uint256 _profitLimitRatio) external;
+    function setLossLimitRatio(uint256 _lossLimitRatio) external;
 }

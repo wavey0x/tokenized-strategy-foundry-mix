@@ -8,27 +8,31 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ILT} from "./interfaces/yb/ILT.sol";
 import {ILiquidityGauge} from "./interfaces/yb/ILiquidityGauge.sol";
 import {IGaugeController} from "./interfaces/yb/IGaugeController.sol";
-import {ICurveCryptoPool} from "./interfaces/yb/ICurveCryptoPool.sol";
 import {IAuction} from "./interfaces/IAuction.sol";
 import {RewardsSwapper} from "./RewardsSwapper.sol";
 import {BaseHealthCheck} from "@periphery/Bases/HealthCheck/BaseHealthCheck.sol";
 
 /**
- * @title YieldBasisGaugeStrategy
+ * @title YBGaugeStrategy
  * @author Yearn Finance
- * @notice Yearn V3 strategy that stakes Yield Basis LT tokens for YB emissions
- * @dev Staked strategy - earns YB tokens but foregoes trading fees
+ * @notice Yearn V3 strategy that stakes LT tokens in Yield Basis gauge for YB emissions
+ * @dev Simplified staker strategy - takes LT as asset, stakes in gauge, earns YB rewards
  *
- * This strategy provides exposure to YB governance token emissions by staking ybBTC.
- * Users deposit BTC → strategy deposits to LT → stakes in Gauge → earns YB → sells for BTC.
+ * This strategy is designed to be used with an LT Vault (not a BTC Vault).
+ * Users deposit LT → strategy stakes in Gauge → earns YB → sells for LT.
+ *
+ * Key features:
+ * - Direct LT → Gauge staking (no BTC conversion)
+ * - Earns YB governance token emissions
+ * - Sells YB rewards for more LT
  */
-contract YieldBasisGaugeStrategy is BaseHealthCheck {
+contract YBGaugeStrategy is BaseHealthCheck {
     using SafeERC20 for ERC20;
 
     // ===== IMMUTABLE STATE =====
 
-    /// @notice Yield Basis LT contract (e.g., yb-WBTC)
-    ILT public immutable ltToken;
+    /// @notice Yearn Vault that owns this strategy
+    address public immutable vault;
 
     /// @notice Liquidity Gauge for staking LT
     ILiquidityGauge public immutable gauge;
@@ -38,12 +42,6 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
 
     /// @notice Gauge Controller (for emissions preview)
     IGaugeController public immutable gaugeController;
-
-    /// @notice Curve Cryptopool for LP pricing
-    ICurveCryptoPool public immutable cryptopool;
-
-    /// @notice Stablecoin used for debt (crvUSD)
-    ERC20 public immutable stablecoin;
 
     // ===== SWAP TYPE =====
 
@@ -64,20 +62,11 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
 
     // ===== CONFIGURATION =====
 
-    /// @notice Maximum slippage for deposits (in basis points)
-    uint256 public maxDepositSlippage;
-
-    /// @notice Maximum slippage for withdrawals (in basis points)
-    uint256 public maxWithdrawSlippage;
-
     /// @notice RewardsSwapper contract for direct DEX swaps
     RewardsSwapper public rewardsSwapper;
 
     /// @notice Auction contract for reward token sales
     address public auction;
-
-    /// @notice Whether emergency withdraw has been completed and crvUSD fully sold to asset
-    bool public emergencyRecoveryCompleted;
 
     /// @notice Mapping of token address to reward configuration (packed in 1 slot)
     mapping(address => RewardTokenConfig) public rewardTokenConfigs;
@@ -85,16 +74,8 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     /// @notice All reward tokens managed by this strategy
     address[] internal allRewardTokens;
 
-    // ===== CONSTANTS =====
-
-    uint256 internal constant PRECISION = 1e18;
-
     // ===== EVENTS =====
 
-    event SlippageUpdated(
-        uint256 depositSlippage,
-        uint256 withdrawSlippage
-    );
     event RewardsSwapperUpdated(address swapper);
     event AuctionUpdated(address auction);
     event RewardTokenConfigured(
@@ -104,193 +85,152 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         uint256 maxAmountToSell,
         bool shouldClaim
     );
-    event EmergencyRecoveryCompleted(bool emergencyRecoveryCompleted);
 
     // ===== CONSTRUCTOR =====
 
     /**
      * @notice Initialize the strategy
-     * @param _asset Underlying asset (e.g., WBTC, cbBTC)
+     * @param _ltToken LT token address (this is the asset!)
      * @param _name Strategy name
-     * @param _ltToken LT contract address
      * @param _gauge LiquidityGauge contract address
-     * @param _cryptopool Curve cryptopool address
+     * @param _vault Yearn Vault that will own this strategy
      */
     constructor(
-        address _asset,
-        string memory _name,
         address _ltToken,
+        string memory _name,
         address _gauge,
-        address _cryptopool
-    ) BaseHealthCheck(_asset, _name) {
-        ltToken = ILT(_ltToken);
+        address _vault
+    ) BaseHealthCheck(_ltToken, _name) {
+        vault = _vault;
         gauge = ILiquidityGauge(_gauge);
-        cryptopool = ICurveCryptoPool(_cryptopool);
-        stablecoin = ERC20(ltToken.STABLECOIN());
 
         // Get YB and GC from gauge
         ybToken = ERC20(gauge.YB());
         gaugeController = IGaugeController(gauge.GC());
 
-        // Verify asset matches
-        require(ltToken.ASSET_TOKEN() == _asset, "Asset mismatch");
+        // Verify gauge accepts this LT token
         require(gauge.LP_TOKEN() == _ltToken, "Gauge LP mismatch");
 
-        // Default configuration
-        maxDepositSlippage = 50; // 0.5%
-        maxWithdrawSlippage = 50; // 0.5%
+        // Approve gauge to spend LT
+        asset.safeApprove(_gauge, type(uint256).max);
 
-        // Approvals
-        asset.safeApprove(_ltToken, type(uint256).max);
-        ERC20(_ltToken).safeApprove(_gauge, type(uint256).max);
-
-        // Add reward tokens. Include stablecoin since LP value can be returned as both BTC+crvUSD when AMM is killed.
+        // Add YB as reward token
         _addRewardToken(address(ybToken), SwapType.AUCTION, 1e18, 100_000e18, true);
-        _addRewardToken(address(stablecoin), SwapType.AUCTION, 1e18, 100_000e18, false);
     }
 
     // ===== REQUIRED OVERRIDES =====
 
     /**
-     * @notice Deploy assets into LT token and stake in gauge
-     * @param _amount Amount of asset to deploy
+     * @notice Deploy LT into gauge
+     * @param _amount Amount of LT to stake
      */
     function _deployFunds(uint256 _amount) internal override {
         if (TokenizedStrategy.isShutdown()) return;
+        if (_amount == 0) return;
 
-        // Step 1: Calculate deposit parameters
-        uint256 debtNeeded = _calculateDebtForDeposit(_amount);
-        uint256 pricePerShare = ltToken.pricePerShare();
-        uint256 expectedShares = (_amount * PRECISION) / pricePerShare;
-        uint256 minShares =
-            (expectedShares * (MAX_BPS - maxDepositSlippage)) / MAX_BPS;
-
-        // Step 2: Deposit to LT token
-        uint256 ltReceived =
-            ltToken.deposit(_amount, debtNeeded, minShares, address(this));
-
-        // Step 3: Stake LT in gauge
-        if (ltReceived > 0) {
-            gauge.deposit(ltReceived, address(this));
-        }
+        // Direct stake: LT → Gauge
+        gauge.deposit(_amount, address(this));
     }
 
     /**
-     * @notice Unstake from gauge and withdraw from LT
-     * @param _amount Amount of asset to withdraw
-     *
-     * Two-step process:
-     * 1. Unstake from gauge (get ybBTC back)
-     * 2. Withdraw from LT (get asset back)
+     * @notice Unstake LT from gauge
+     * @param _amount Amount of LT to withdraw
      */
     function _freeFunds(uint256 _amount) internal override {
-        bool isKilled = ltToken.is_killed();
-        require(
-            !isKilled
-            || (isKilled && emergencyRecoveryCompleted)
-            , "LT is killed and emergency withdraw has not been completed"
-        );
+        uint256 gaugeShares = gauge.balanceOf(address(this));
+        if (gaugeShares == 0) return;
 
-        // Step 1: Calculate gauge shares needed
-        uint256 sharesToRedeem =
-            _calculateGaugeSharesToWithdraw(_amount);
-        if (sharesToRedeem == 0) return;
+        // Calculate gauge shares needed for _amount of LT
+        uint256 sharesToRedeem = gauge.convertToShares(_amount);
 
         // Clamp to our balance
-        uint256 gaugeShares = gauge.balanceOf(address(this));
-        sharesToRedeem =
-            sharesToRedeem > gaugeShares ? gaugeShares : sharesToRedeem;
+        sharesToRedeem = sharesToRedeem > gaugeShares ? gaugeShares : sharesToRedeem;
 
-        // Step 2: Redeem from gauge (get LT back)
-        uint256 ltReceived =
-            gauge.redeem(sharesToRedeem, address(this), address(this));
+        if (sharesToRedeem == 0) return;
 
-        // Step 3: Withdraw from LT to asset
-        if (ltReceived > 0) {
-            uint256 expectedAssets = ltToken.pricePerShare() * ltReceived / PRECISION;
-            uint256 minAssets =
-                (expectedAssets * (MAX_BPS - maxWithdrawSlippage)) / MAX_BPS;
-
-            ltToken.withdraw(ltReceived, minAssets, address(this));
-        }
+        // Unstake from gauge (get LT back)
+        gauge.redeem(sharesToRedeem, address(this), address(this));
     }
 
     /**
      * @notice Harvest YB rewards and report total assets
-     * @return _totalAssets Total assets held by strategy
+     * @return _totalAssets Total LT held by strategy
      *
      * Process:
      * 1. Claim YB rewards from gauge
-     * 2. Sell YB for asset
-     * 3. Calculate total: gaugeShares → LT → asset value + loose assets
+     * 2. Sell YB for LT
+     * 3. Calculate total: gauge shares (in LT terms) + loose LT
      */
     function _harvestAndReport()
         internal
         override
         returns (uint256 _totalAssets)
     {
-        
-        // if LT is killed then we block reports to explicitly ensure the position has been unwound
-        bool isKilled = ltToken.is_killed();
-        require(
-            !isKilled || 
-            (isKilled && emergencyRecoveryCompleted)
-            , "LT is killed and emergency withdraw has not been completed"
-        );
+        // Harvest and sell rewards
+        if (!TokenizedStrategy.isShutdown()) {
+            _harvestRewards();
+        }
 
-        _harvestRewards();
-        // Convert gauge shares -> LT -> asset value
+        // Convert gauge shares to LT equivalent
         uint256 gaugeShares = gauge.balanceOf(address(this));
-        uint256 ltEquivalent = gauge.convertToAssets(gaugeShares);
-        uint256 assetValue =
-            (ltEquivalent * ltToken.pricePerShare()) / PRECISION;
+        uint256 ltInGauge = gauge.convertToAssets(gaugeShares);
 
-        _totalAssets = assetValue + asset.balanceOf(address(this));
+        _totalAssets = ltInGauge + asset.balanceOf(address(this));
     }
-
 
     // ===== OPTIONAL OVERRIDES =====
 
     /**
-     * @notice Emergency withdraw when killed
+     * @notice Restrict deposits to vault only
+     * @param _owner Address attempting to deposit
+     * @return Maximum amount that can be deposited (0 if not vault)
+     */
+    function availableDepositLimit(address _owner)
+        public
+        view
+        override
+        returns (uint256)
+    {
+        // Only the vault can deposit
+        if (_owner != vault) return 0;
+        return type(uint256).max;
+    }
+
+    /**
+     * @notice Emergency withdraw from gauge
      * @param _amount Amount to withdraw
      */
     function _emergencyWithdraw(uint256 _amount) internal override {
-        // Step 1: Unstake from gauge
         uint256 gaugeShares = gauge.balanceOf(address(this));
-        uint256 requestedShares = _calculateGaugeSharesToWithdraw(_amount);
-        requestedShares = requestedShares > gaugeShares ? gaugeShares : requestedShares;
+        if (gaugeShares == 0) return;
 
-        if (requestedShares > 0) gauge.redeem(requestedShares, address(this), address(this));
-        uint256 ltBalance = ltToken.balanceOf(address(this));
+        uint256 sharesToRedeem = gauge.convertToShares(_amount);
+        sharesToRedeem = sharesToRedeem > gaugeShares ? gaugeShares : sharesToRedeem;
 
-        if (ltBalance == 0) return;
-
-        // Step 2: Withdraw from LT. Emergency withdraw must be  used when AMM is killed.
-        if (ltToken.is_killed()) {
-            ltToken.emergency_withdraw(ltBalance, address(this), address(this));
-        } else if (ltBalance > 0) {
-            uint256 expectedAssets = ltToken.pricePerShare() * ltBalance / PRECISION;
-            uint256 minAssets =
-                (expectedAssets * (MAX_BPS - maxWithdrawSlippage)) / MAX_BPS;
-            // Normal withdraw
-            ltToken.withdraw(ltBalance, minAssets, address(this));
+        if (sharesToRedeem > 0) {
+            gauge.redeem(sharesToRedeem, address(this), address(this));
         }
     }
 
     // ===== HARVEST FUNCTIONS =====
 
     /**
-     * @notice Harvest rewards and sell for asset
+     * @notice Harvest rewards and sell for LT
      * @dev Internal function called during _harvestAndReport
      */
     function _harvestRewards() internal {
         for (uint256 i = 0; i < allRewardTokens.length; i++) {
             address token = allRewardTokens[i];
             RewardTokenConfig memory config = rewardTokenConfigs[token];
-            if (config.shouldClaim) gauge.claim(token, address(this));
+
+            // Claim if configured
+            if (config.shouldClaim) {
+                gauge.claim(token, address(this));
+            }
+
             uint256 amount = ERC20(token).balanceOf(address(this));
 
+            // Sell if above minimum
             if (config.swapType != SwapType.NULL && amount > config.minAmountToSell) {
                 _swapRewardForAsset(token, amount);
             }
@@ -298,7 +238,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     }
 
     /**
-     * @notice Swap reward tokens for asset
+     * @notice Swap reward tokens for LT
      * @param _token Reward token address
      * @param _amount Amount of reward token to sell
      * @dev Routes based on swapType: SWAP (router) or AUCTION
@@ -307,10 +247,12 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         internal
     {
         RewardTokenConfig memory config = rewardTokenConfigs[_token];
+
         if (config.swapType == SwapType.SWAP) {
             require(address(rewardsSwapper) != address(0), "Swapper not set");
             rewardsSwapper.swap(_token, _amount, 0); // min out = 0
         }
+
         if (config.swapType == SwapType.AUCTION) {
             address _auction = auction;
             require(_auction != address(0), "Auction not set");
@@ -328,23 +270,6 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
             address token = allRewardTokens[i];
             gauge.claim(token, address(this));
         }
-    }
-
-    /**
-     * @notice Set slippage tolerances for LT deposits and withdrawals
-     */
-    function setSlippage(
-        uint256 _depositSlippage,
-        uint256 _withdrawSlippage
-    ) external onlyManagement {
-        // No max slippage on withdraw in order to safely exit in emergency
-        require(_depositSlippage <= 500, "Deposit slippage too high");
-        require(_withdrawSlippage <= 500, "Withdraw slippage too high");
-
-        maxDepositSlippage = _depositSlippage;
-        maxWithdrawSlippage = _withdrawSlippage;
-
-        emit SlippageUpdated(_depositSlippage, _withdrawSlippage);
     }
 
     /**
@@ -390,31 +315,6 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         emit RewardsSwapperUpdated(_swapper);
     }
 
-    function availableWithdrawLimit(address /*_owner*/) public view override returns (uint256) {
-        if (ltToken.is_killed() && !emergencyRecoveryCompleted) {
-            return 0;
-        } 
-        return type(uint256).max;
-    }
-
-    function availableDepositLimit(address /*_owner*/) public view override returns (uint256) {
-        if (ltToken.is_killed()) {
-            return 0;
-        }
-        return type(uint256).max;
-    }
-
-    /**
-     * @notice Set emergency recovery completed only when crvUSD is fully sold to asset
-     * @dev In extreme cases, LT.emergency_withdraw() must to recover assets. 
-     *      Because this type of withdraw can break the position into BTC + crvUSD, and we do not have full control over it being called on our behalf,
-     *      we must explicitly mark "completed" once the crvUSD is fully sold to back to asset. Otherwise the strategy will avoid syncing totalAssets to avoid reporting an artificial loss.
-     */
-    function setEmergencyRecoveryCompleted(bool _emergencyRecoveryCompleted) external onlyManagement {
-        emergencyRecoveryCompleted = _emergencyRecoveryCompleted;
-        emit EmergencyRecoveryCompleted(_emergencyRecoveryCompleted);
-    }
-
     /**
      * @notice Kick an auction for a specific reward token
      * @param _token The reward token to auction
@@ -432,10 +332,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
      * @param _from The token being sold
      */
     function _kickAuction(address _from) internal returns (uint256) {
-        require(
-            _from != address(asset) && _from != address(ltToken),
-            "cannot kick"
-        );
+        require(_from != address(asset), "cannot kick");
         require(auction != address(0), "Auction not set");
 
         RewardTokenConfig memory config = rewardTokenConfigs[_from];
@@ -471,9 +368,9 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
     /**
      * @notice Add a new reward token to manage
      * @param _token The reward token address
+     * @param _swapType The swap type for this token
      * @param _minAmountToSell Minimum amount to sell
      * @param _maxAmountToSell Maximum amount to sell
-     * @param _swapType The swap type for this token
      * @param _shouldClaim Whether reward is claimable from gauge
      */
     function addRewardToken(
@@ -486,14 +383,18 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         _addRewardToken(_token, _swapType, _minAmountToSell, _maxAmountToSell, _shouldClaim);
     }
 
-    function _addRewardToken(address _token, SwapType _swapType, uint256 _minAmountToSell, uint256 _maxAmountToSell, bool _shouldClaim) internal {
-        require(
-            _token != address(asset) && _token != address(ltToken) && _token != address(gauge),
-            "!allowed"
-        );
+    function _addRewardToken(
+        address _token,
+        SwapType _swapType,
+        uint256 _minAmountToSell,
+        uint256 _maxAmountToSell,
+        bool _shouldClaim
+    ) internal {
+        require(_token != address(asset) && _token != address(gauge), "!allowed");
         require(rewardTokenConfigs[_token].swapType == SwapType.NULL, "Already added");
         require(_swapType != SwapType.NULL, "!null");
         require(_minAmountToSell <= type(uint120).max, "Min amount too large");
+
         // Clamp to max uint120
         _maxAmountToSell = _maxAmountToSell > type(uint120).max ? type(uint120).max : _maxAmountToSell;
 
@@ -513,6 +414,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
                 type(uint256).max
             );
         }
+
         emit RewardTokenConfigured(_token, _swapType, _minAmountToSell, _maxAmountToSell, _shouldClaim);
     }
 
@@ -524,6 +426,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         address[] memory _allRewardTokens = allRewardTokens;
         uint256 _length = _allRewardTokens.length;
         bool found = false;
+
         for (uint256 i; i < _length; ++i) {
             if (_allRewardTokens[i] == _token) {
                 found = true;
@@ -532,6 +435,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
                 break;
             }
         }
+
         require(found, "Not a valid reward token");
 
         // Revoke approval from swapper
@@ -563,6 +467,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
         require(config.swapType != SwapType.NULL, "Token not configured");
         require(_swapType != SwapType.NULL, "Invalid swap type");
         require(_minAmountToSell <= type(uint120).max, "Min amount too large");
+
         // Clamp to max uint120
         _maxAmountToSell = _maxAmountToSell > type(uint120).max ? type(uint120).max : _maxAmountToSell;
 
@@ -572,45 +477,7 @@ contract YieldBasisGaugeStrategy is BaseHealthCheck {
             maxAmountToSell: uint120(_maxAmountToSell),
             shouldClaim: _shouldClaim
         });
+
         emit RewardTokenConfigured(_token, _swapType, _minAmountToSell, _maxAmountToSell, _shouldClaim);
-    }
-
-    // ===== INTERNAL HELPERS =====
-
-    /**
-     * @notice Calculate debt needed for LT deposit
-     */
-    function _calculateDebtForDeposit(uint256 _assetAmount)
-        internal
-        view
-        returns (uint256 debtAmount)
-    {
-        uint256 balance0 = cryptopool.balances(0); // crvUSD
-        uint256 balance1 = cryptopool.balances(1); // BTC
-
-        if (balance1 > 0) {
-            debtAmount = (_assetAmount * balance0) / balance1;
-        } else {
-            debtAmount = _assetAmount;
-        }
-    }
-
-    /**
-     * @notice Calculate gauge shares to withdraw
-     */
-    function _calculateGaugeSharesToWithdraw(
-        uint256 _assetAmount
-    ) internal view returns (uint256 shares) {
-        // We know the amount of assets, thus need to make two conversions:
-        // 1) asset (BTC) -> LT shares (ybBTC)
-        // 2) LT shares -> gauge shares
-
-        // Step 1: Convert asset to LT
-        uint256 pricePerShare = ltToken.pricePerShare(); // pps uses non-manipulatable oracle pricing but is not precise
-        if (pricePerShare == 0) return 0;
-        uint256 ltNeeded = (_assetAmount * PRECISION) / pricePerShare;
-
-        // Step 2: Convert LT to gauge shares
-        shares = gauge.convertToShares(ltNeeded);
     }
 }

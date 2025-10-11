@@ -6,6 +6,10 @@ import {Test} from "forge-std/Test.sol";
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IStrategyInterface} from "../../interfaces/IStrategyInterface.sol";
+import {ILT} from "../../interfaces/yb/ILT.sol";
+import {IGaugeController} from "../../interfaces/yb/IGaugeController.sol";
+import {Constants} from "../utils/Constants.sol";
+import {IYearnVaultFactory} from "../../interfaces/IYearnVaultFactory.sol";
 
 // Inherit the events so they can be checked if desired.
 import {IEvents} from "@tokenized-strategy/interfaces/IEvents.sol";
@@ -43,29 +47,23 @@ contract Setup is Test, IEvents {
     // Default profit max unlock time is set for 10 days
     uint256 public profitMaxUnlockTime = 10 days;
 
+    // Set Yearn Vault Factory (already deployed on mainnet)
+    IYearnVaultFactory public yearnVaultFactory = IYearnVaultFactory(Constants.YEARN_VAULT_FACTORY);
+
     function setUp() public virtual {
         _setTokenAddrs();
+        _configureYB();
 
-        // Set asset
-        asset = ERC20(tokenAddrs["DAI"]);
+        // Set asset - WBTC for YB strategies
+        asset = ERC20(tokenAddrs["WBTC"]);
 
         // Set decimals
         decimals = asset.decimals();
-
-        // Deploy strategy and set variables
-        strategy = IStrategyInterface(setUpStrategy());
-
-        // label all the used addresses for traces
-        vm.label(keeper, "keeper");
-        vm.label(address(asset), "asset");
-        vm.label(management, "management");
-        vm.label(address(strategy), "strategy");
-        vm.label(performanceFeeRecipient, "performanceFeeRecipient");
     }
 
-    function setUpStrategy() public virtual returns (address) {
-        // Override in child contracts to deploy specific strategy
-        revert("Must override setUpStrategy in child contract");
+    function setUpStrategy() public virtual returns (IStrategyInterface) {
+        // Child contracts must override this
+        revert("Must override setUpStrategy");
     }
 
     function depositIntoStrategy(
@@ -84,7 +82,7 @@ contract Setup is Test, IEvents {
         IStrategyInterface _strategy,
         address _user,
         uint256 _amount
-    ) public {
+    ) public virtual {
         airdrop(asset, _user, _amount);
         depositIntoStrategy(_strategy, _user, _amount);
     }
@@ -95,7 +93,7 @@ contract Setup is Test, IEvents {
         uint256 _totalAssets,
         uint256 _totalDebt,
         uint256 _totalIdle
-    ) public {
+    ) public view {
         uint256 _assets = _strategy.totalAssets();
         uint256 _balance = ERC20(_strategy.asset()).balanceOf(
             address(_strategy)
@@ -113,22 +111,6 @@ contract Setup is Test, IEvents {
         deal(address(_asset), _to, balanceBefore + _amount);
     }
 
-    function setFees(uint16 _protocolFee, uint16 _performanceFee) public {
-        // Get factory from the strategy
-        address factoryAddress = strategy.FACTORY();
-        address gov = IFactory(factoryAddress).governance();
-
-        // Need to make sure there is a protocol fee recipient to set the fee.
-        vm.prank(gov);
-        IFactory(factoryAddress).set_protocol_fee_recipient(gov);
-
-        vm.prank(gov);
-        IFactory(factoryAddress).set_protocol_fee_bps(_protocolFee);
-
-        vm.prank(management);
-        strategy.setPerformanceFee(_performanceFee);
-    }
-
     function _setTokenAddrs() internal {
         tokenAddrs["WBTC"] = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
         tokenAddrs["YFI"] = 0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e;
@@ -137,5 +119,25 @@ contract Setup is Test, IEvents {
         tokenAddrs["USDT"] = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
         tokenAddrs["DAI"] = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
         tokenAddrs["USDC"] = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    }
+
+    /**
+     * @notice Configure Yield Basis protocol for testing
+     * @dev Allocates stablecoins to LTs and adds gauge to controller
+     */
+    function _configureYB() internal {
+        vm.startPrank(ILT(Constants.WBTC_LT).admin());
+        deal(Constants.CRVUSD, Constants.YB_FACTORY, 100_000_000_000e18); // 100B crvUSD
+        ILT(Constants.WBTC_LT).allocate_stablecoins(30_000_000_000e18);   // 30B per LT
+        ILT(Constants.CBBTC_LT).allocate_stablecoins(30_000_000_000e18);
+        ILT(Constants.TBTC_LT).allocate_stablecoins(30_000_000_000e18);
+        vm.stopPrank();
+
+        IGaugeController gc = IGaugeController(Constants.GAUGE_CONTROLLER);
+        address gaugeToAdd = Constants.WBTC_STAKER;
+        if (gc.time_weight(gaugeToAdd) == 0) {
+            vm.prank(gc.owner());
+            gc.add_gauge(gaugeToAdd);
+        }
     }
 }

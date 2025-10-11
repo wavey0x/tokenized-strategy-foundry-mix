@@ -10,6 +10,7 @@ library Constants {
 
     // Common Addresses
     address constant CRVUSD = 0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E;
+    address constant YEARN_VAULT_FACTORY = 0x770D0d1Fb036483Ed4AbB6d53c1C88fb277D812F;
     
     // DAO
     address constant YB = 0x01791F726B4103694969820be083196cC7c045fF;

@@ -2,17 +2,17 @@
 pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
-import {YieldBasisGaugeStrategy} from "../YieldBasisGaugeStrategy.sol";
-import {RewardsSwapper} from "../RewardsSwapper.sol";
+import {YBGaugeStrategy} from "../../YBGaugeStrategy.sol";
+import {RewardsSwapper} from "../../RewardsSwapper.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /**
  * @title SwapperUpgradeTest
- * @notice Tests for upgrading RewardsSwapper on YieldBasisGaugeStrategy
+ * @notice Tests for upgrading RewardsSwapper on YBGaugeStrategy
  * @dev Verifies auth, approvals, and proper state updates
  */
 contract SwapperUpgradeTest is Test {
-    YieldBasisGaugeStrategy public strategy;
+    YBGaugeStrategy public strategy;
     RewardsSwapper public oldSwapper;
     RewardsSwapper public newSwapper;
 

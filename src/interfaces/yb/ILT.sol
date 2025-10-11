@@ -105,4 +105,8 @@ interface ILT is IERC20 {
     /// @notice Get the admin address
     /// @return Admin address
     function admin() external view returns (address);
+
+    /// @notice Get the AMM address
+    /// @return AMM address
+    function amm() external view returns (address);
 }

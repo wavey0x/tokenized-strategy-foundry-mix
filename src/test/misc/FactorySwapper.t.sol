@@ -2,9 +2,9 @@
 pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
-import {YieldBasisStrategyFactory} from "../YieldBasisStrategyFactory.sol";
-import {YieldBasisGaugeStrategy} from "../YieldBasisGaugeStrategy.sol";
-import {RewardsSwapper} from "../RewardsSwapper.sol";
+import {YBVaultFactory} from "../../YBVaultFactory.sol";
+import {YBGaugeStrategy} from "../../YBGaugeStrategy.sol";
+import {RewardsSwapper} from "../../RewardsSwapper.sol";
 
 /**
  * @title FactorySwapperTest
@@ -12,7 +12,7 @@ import {RewardsSwapper} from "../RewardsSwapper.sol";
  * @dev Verifies factory deploys swapper and sets it on gauge strategy
  */
 contract FactorySwapperTest is Test {
-    YieldBasisStrategyFactory public factory;
+    YBVaultFactory public factory;
 
     address public asset;
     address public ltToken;
