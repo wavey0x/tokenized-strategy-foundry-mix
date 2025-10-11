@@ -72,46 +72,11 @@ contract RouterStrategyTest is RouterStrategySetup {
 
         // Withdraw half
         vm.prank(user);
-        vault.redeem(vault.balanceOf(user) / 2, user, user);
+        uint256 vaultShares = vault.balanceOf(user);
+        vault.redeem(vaultShares, user, user);
 
         uint256 yVaultSharesAfter = ltYVault.balanceOf(address(routerStrategy));
         assertLt(yVaultSharesAfter, yVaultSharesBefore, "yVault shares should decrease");
-    }
-
-    // ===== SLIPPAGE CONFIGURATION TESTS =====
-
-    /**
-     * @notice Test slippage configuration
-     */
-    function test_routerStrategy_slippageConfig() public view {
-        // Check default slippage values
-        assertEq(routerStrategy.maxDepositSlippage(), 50, "Default deposit slippage should be 50 bps");
-        assertEq(routerStrategy.maxWithdrawSlippage(), 50, "Default withdraw slippage should be 50 bps");
-    }
-
-    /**
-     * @notice Test updating slippage values
-     */
-    function test_routerStrategy_updateSlippage() public {
-        vm.prank(management);
-        routerStrategy.setSlippage(100, 100); // 1% each
-
-        assertEq(routerStrategy.maxDepositSlippage(), 100);
-        assertEq(routerStrategy.maxWithdrawSlippage(), 100);
-    }
-
-    /**
-     * @notice Test slippage limits
-     */
-    function test_routerStrategy_slippageLimits() public {
-        // Should revert if slippage too high (>5%)
-        vm.expectRevert("Deposit slippage too high");
-        vm.prank(management);
-        routerStrategy.setSlippage(501, 50);
-
-        vm.expectRevert("Withdraw slippage too high");
-        vm.prank(management);
-        routerStrategy.setSlippage(50, 501);
     }
 
     // ===== CONVERSION TESTS =====

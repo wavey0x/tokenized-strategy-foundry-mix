@@ -172,15 +172,15 @@ contract RouterStrategyOperationTest is RouterStrategySetup {
     function test_operation_withdrawFlow(uint256 _amount) public {
         vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
 
-        // Deposit
         mintAndDepositIntoStrategy(strategy, user, _amount);
 
         uint256 yVaultSharesBefore = ltYVault.balanceOf(address(routerStrategy));
         uint256 userBtcBefore = asset.balanceOf(user);
 
         // Withdraw
+        uint256 vaultShares = vault.balanceOf(user);
         vm.prank(user);
-        vault.redeem(vault.balanceOf(user), user, user);
+        vault.redeem(vaultShares, user, user);
 
         // Strategy yVault shares should decrease
         assertEq(ltYVault.balanceOf(address(routerStrategy)), 0, "yVault shares should be redeemed");

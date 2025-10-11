@@ -3,6 +3,7 @@ pragma solidity ^0.8.18;
 
 import {GaugeStrategySetup} from "../utils/GaugeStrategySetup.sol";
 import {IStrategyInterface} from "src/interfaces/IStrategyInterface.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /**
  * @title GaugeStrategyShutdownTest
@@ -15,6 +16,8 @@ contract GaugeStrategyShutdownTest is GaugeStrategySetup {
      * @notice Test strategy shutdown prevents deposits
      */
     function test_shutdown_preventsDeposits(uint256 _amount) public {
+        maxFuzzAmount = descaleTokenDecimals(ERC20(asset), maxFuzzAmount);
+        minFuzzAmount = descaleTokenDecimals(ERC20(asset), minFuzzAmount);
         vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
 
         // Initial deposit

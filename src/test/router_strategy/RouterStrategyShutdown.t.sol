@@ -208,25 +208,6 @@ contract RouterStrategyShutdownTest is RouterStrategySetup {
     }
 
     /**
-     * @notice Test withdraw limit is 0 when LT is killed
-     */
-    function test_killedLT_blocksWithdrawals() public view {
-        // Note: We can't easily simulate LT being killed in tests without complex mocking
-        // This test verifies the logic exists
-        // If lt.is_killed() == true, availableWithdrawLimit should return 0
-
-        // Check current state (should not be killed)
-        assertFalse(lt.is_killed(), "LT should not be killed in normal tests");
-
-        // Verify withdraw limit is unlimited when not killed
-        assertEq(
-            strategy.availableWithdrawLimit(user),
-            type(uint256).max,
-            "Withdraw limit should be unlimited when LT not killed"
-        );
-    }
-
-    /**
      * @notice Test emergency withdraw handles zero yVault balance
      */
     function test_emergencyWithdraw_handlesZeroBalance() public {

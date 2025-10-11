@@ -55,6 +55,9 @@ contract YBRouterStrategy is BaseHealthCheck {
     /// @notice Maximum slippage for withdrawals (in basis points)
     uint256 public maxWithdrawSlippage;
 
+    uint256 public minLPAmount;
+    uint256 public maxLPAmount;
+
     // ===== CONSTANTS =====
 
     uint256 internal constant PRECISION = 1e18;
@@ -91,8 +94,11 @@ contract YBRouterStrategy is BaseHealthCheck {
         assetDecimals = ERC20(_asset).decimals();
         require(assetDecimals <= 18, "Asset decimals must be <= 18");
 
-        maxDepositSlippage = 200; // 1%
-        maxWithdrawSlippage = 200; // 1%
+        minLPAmount = 1e14;
+        maxLPAmount = 50e18;
+
+        maxDepositSlippage = 500; // 5%
+        maxWithdrawSlippage = 500; // 5%
 
         asset.safeApprove(_ltToken, type(uint256).max);
         ERC20(_ltToken).safeApprove(_yVault, type(uint256).max);
@@ -107,9 +113,12 @@ contract YBRouterStrategy is BaseHealthCheck {
      */
     function _deployFunds(uint256 _amount) internal override {
         if (TokenizedStrategy.isShutdown()) return;
+        _amount = _amount > maxLPAmount ? maxLPAmount : _amount;
+        uint256 ltAmount = assetToLt(_amount);
+        if (ltAmount < minLPAmount) return;
         uint256 debtNeeded = _calculateDebtForDeposit(_amount);
         uint256 minShares =
-            (assetToLt(_amount) * (MAX_BPS - maxDepositSlippage)) / MAX_BPS;
+            (ltAmount * (MAX_BPS - maxDepositSlippage)) / MAX_BPS;
         ltToken.deposit(_amount, debtNeeded, minShares, address(this));
         // Always deposit all LTs to yVault
         yVault.deposit(ltToken.balanceOf(address(this)), address(this));
@@ -181,7 +190,7 @@ contract YBRouterStrategy is BaseHealthCheck {
         if (ltToken.is_killed()) {
             return 0;
         }
-        return type(uint256).max;
+        return maxLPAmount + asset.balanceOf(address(this));
     }
 
     function availableDepositLimit(address _owner) public view override returns (uint256) {
@@ -200,25 +209,13 @@ contract YBRouterStrategy is BaseHealthCheck {
      */
     function _emergencyWithdraw(uint256 _amount) internal override {
         uint256 vaultBalance = yVault.balanceOf(address(this));
-        if (vaultBalance == 0) return;
-
-        // Step 1: Calculate vault shares needed
         uint256 vaultSharesToRedeem = _convertAmountToVaultShares(_amount, vaultBalance);
-        if (vaultSharesToRedeem == 0) return;
-
-        // Step 2: Redeem from yVault to get LT back
-        uint256 ltReceived = yVault.redeem(vaultSharesToRedeem, address(this), address(this));
-        if (ltReceived == 0) return;
-
-        // Step 3: Withdraw from LT (use emergency_withdraw if killed, normal withdraw otherwise)
-        if (ltToken.is_killed()) {
-            ltToken.emergency_withdraw(ltReceived, address(this), address(this));
-        } else {
-            uint256 expectedAssets = ltToken.preview_withdraw(ltReceived);
-            uint256 minAssets =
-                (expectedAssets * (MAX_BPS - maxWithdrawSlippage)) / MAX_BPS;
-            ltToken.withdraw(ltReceived, minAssets, address(this));
-        }
+        if (vaultSharesToRedeem != 0) yVault.redeem(vaultSharesToRedeem, address(this), address(this));
+        uint256 ltBalance = ltToken.balanceOf(address(this));
+        if (ltBalance == 0) return;
+        uint256 minAssets =
+            (ltToAsset(ltBalance) * (MAX_BPS - maxWithdrawSlippage)) / MAX_BPS;
+        ltToken.withdraw(ltBalance, minAssets, address(this));
     }
 
     // ===== MANAGEMENT FUNCTIONS =====
@@ -232,9 +229,6 @@ contract YBRouterStrategy is BaseHealthCheck {
         uint256 _depositSlippage,
         uint256 _withdrawSlippage
     ) external onlyManagement {
-        require(_depositSlippage <= 1500, "Deposit slippage too high"); // Max 15%
-        require(_withdrawSlippage <= 1500, "Withdraw slippage too high"); // Max 15%
-
         maxDepositSlippage = _depositSlippage;
         maxWithdrawSlippage = _withdrawSlippage;
 
@@ -250,7 +244,6 @@ contract YBRouterStrategy is BaseHealthCheck {
      */
     function ltToAsset(uint256 _ltAmount) public view returns (uint256) {
         return (_ltAmount * ltToken.pricePerShare()) / (10 ** (36 - assetDecimals));
-        return ltToken.preview_withdraw(_ltAmount);
     }
 
     /**
@@ -299,23 +292,5 @@ contract YBRouterStrategy is BaseHealthCheck {
 
         // Clamp to our vault balance
         if (vaultSharesToRedeem > _vaultBalance) vaultSharesToRedeem = _vaultBalance;
-    }
-
-    /**
-     * @notice Calculate shares to withdraw for desired asset amount
-     * @param _assetAmount Desired asset amount
-     * @param _ltBalance Current LT balance
-     * @return sharesToRedeem Shares to redeem
-     */
-    function _calculateSharesToWithdraw(
-        uint256 _assetAmount,
-        uint256 _ltBalance
-    ) internal view returns (uint256 sharesToRedeem) {
-        // Convert asset amount to LT shares
-        sharesToRedeem = assetToLt(_assetAmount);
-        if (sharesToRedeem == 0) return 0;
-
-        // Clamp to our balance
-        if (sharesToRedeem > _ltBalance) sharesToRedeem = _ltBalance;
     }
 }
