@@ -19,5 +19,17 @@
   },
   "lib/tokenized-strategy-periphery": {
     "rev": "0f0c380a32342772fb17709dea9b7cc3a8a0162f"
+  },
+  "lib/vault-periphery": {
+    "tag": {
+      "name": "v3.02",
+      "rev": "2bf699197daf945a7bd437f1f9862e3dc7e5da68"
+    }
+  },
+  "lib/yearn-vaults-v3": {
+    "tag": {
+      "name": "v3.0.4",
+      "rev": "104a2b233bc6d43ba40720d68355b04d2dc31795"
+    }
   }
 }

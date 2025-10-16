@@ -16,8 +16,6 @@ contract GaugeStrategyShutdownTest is GaugeStrategySetup {
      * @notice Test strategy shutdown prevents deposits
      */
     function test_shutdown_preventsDeposits(uint256 _amount) public {
-        maxFuzzAmount = descaleTokenDecimals(ERC20(asset), maxFuzzAmount);
-        minFuzzAmount = descaleTokenDecimals(ERC20(asset), minFuzzAmount);
         vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
 
         // Initial deposit

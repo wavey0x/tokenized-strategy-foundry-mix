@@ -78,12 +78,12 @@ contract RouterStrategyOperationTest is RouterStrategySetup {
     function test_operation_multipleDeposits(uint256 _amount) public {
         vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount / 3);
 
-        address user2 = makeAddr("user2");
-        address user3 = makeAddr("user3");
+        // address user2 = makeAddr("user2");
+        // address user3 = makeAddr("user3");
 
         // First deposit
         mintAndDepositIntoStrategy(strategy, user, _amount);
-        uint256 totalAssets1 = strategy.totalAssets();
+        //uint256 totalAssets1 = strategy.totalAssets();
 
         // // Second deposit
         // mintAndDepositIntoStrategy(strategy, user2, _amount);

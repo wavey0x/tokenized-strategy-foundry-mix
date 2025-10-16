@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.18;
 
-import {YBRouterStrategy} from "./YBRouterStrategy.sol";
-import {YBGaugeStrategy} from "./YBGaugeStrategy.sol";
-import {RewardsSwapper} from "./RewardsSwapper.sol";
-import {ILT} from "./interfaces/yb/ILT.sol";
-import {ILiquidityGauge} from "./interfaces/yb/ILiquidityGauge.sol";
+import {YBRouterStrategy} from "src/YBRouterStrategy.sol";
+import {YBGaugeStrategy} from "src/YBGaugeStrategy.sol";
+import {RewardsSwapper} from "src/utils/RewardsSwapper.sol";
+import {ILT} from "src/interfaces/yb/ILT.sol";
+import {ILiquidityGauge} from "src/interfaces/yb/ILiquidityGauge.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {IStrategy} from "@tokenized-strategy/interfaces/IStrategy.sol";

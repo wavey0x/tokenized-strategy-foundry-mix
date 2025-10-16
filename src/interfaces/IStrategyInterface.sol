@@ -59,4 +59,13 @@ interface IStrategyInterface is IStrategy {
     function claimRewards() external;
     function setProfitLimitRatio(uint256 _profitLimitRatio) external;
     function setLossLimitRatio(uint256 _lossLimitRatio) external;
+    function ltToAsset(uint256 _ltAmount) external view returns (uint256);
+    function assetToLt(uint256 _assetAmount) external view returns (uint256);
+    function setBufferKeepPct(uint256 _bufferKeepPct) external;
+    function setDoHealthCheck(bool _doHealthCheck) external;
+    function doHealthCheck() external view returns (bool);
+    function availableBufferShares() external view returns (uint256);
+    function bufferKeepPct() external view returns (uint256);
+    function distributeBuffer(uint256 _bufferAssetsToDistribute) external;
+    function availableBufferAssets() external view returns (uint256);
 }

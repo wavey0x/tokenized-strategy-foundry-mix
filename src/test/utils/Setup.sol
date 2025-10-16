@@ -127,10 +127,11 @@ contract Setup is Test, IEvents {
      */
     function _configureYB() internal {
         vm.startPrank(ILT(Constants.WBTC_LT).admin());
-        deal(Constants.CRVUSD, Constants.YB_FACTORY, 100_000_000_000e18); // 100B crvUSD
-        ILT(Constants.WBTC_LT).allocate_stablecoins(30_000_000_000e18);   // 30B per LT
-        ILT(Constants.CBBTC_LT).allocate_stablecoins(30_000_000_000e18);
-        ILT(Constants.TBTC_LT).allocate_stablecoins(30_000_000_000e18);
+        uint256 TOTAL_CRVUSD = 100_000_000_000e18;
+        deal(Constants.CRVUSD, Constants.YB_FACTORY, TOTAL_CRVUSD); // 100B crvUSD
+        ILT(Constants.WBTC_LT).allocate_stablecoins(TOTAL_CRVUSD / 3);   // 30B per LT
+        ILT(Constants.CBBTC_LT).allocate_stablecoins(TOTAL_CRVUSD / 3);
+        ILT(Constants.TBTC_LT).allocate_stablecoins(TOTAL_CRVUSD / 3);
         vm.stopPrank();
 
         IGaugeController gc = IGaugeController(Constants.GAUGE_CONTROLLER);

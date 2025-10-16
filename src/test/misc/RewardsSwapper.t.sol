@@ -2,8 +2,8 @@
 pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
-import {RewardsSwapper} from "../../RewardsSwapper.sol";
-import {ICurvePool} from "../../interfaces/ICurvePool.sol";
+import {RewardsSwapper} from "src/utils/RewardsSwapper.sol";
+import {ICurvePool} from "src/interfaces/ICurvePool.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /**

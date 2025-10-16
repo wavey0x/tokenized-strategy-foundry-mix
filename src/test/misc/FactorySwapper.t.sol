@@ -2,9 +2,9 @@
 pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
-import {YBVaultFactory} from "../../YBVaultFactory.sol";
-import {YBGaugeStrategy} from "../../YBGaugeStrategy.sol";
-import {RewardsSwapper} from "../../RewardsSwapper.sol";
+import {YBVaultFactory} from "src/YBVaultFactory.sol";
+import {YBGaugeStrategy} from "src/YBGaugeStrategy.sol";
+import {RewardsSwapper} from "src/utils/RewardsSwapper.sol";
 
 /**
  * @title FactorySwapperTest

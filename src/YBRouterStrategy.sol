@@ -2,14 +2,15 @@
 pragma solidity ^0.8.18;
 
 import {ERC20} from "@tokenized-strategy/BaseStrategy.sol";
+import {BaseHealthCheck} from "@periphery/Bases/HealthCheck/BaseHealthCheck.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 // Import interfaces for Yield Basis protocol
 import {ILT} from "./interfaces/yb/ILT.sol";
 import {ICurveCryptoPool} from "./interfaces/yb/ICurveCryptoPool.sol";
 import {IAuction} from "./interfaces/IAuction.sol";
-import {RewardsSwapper} from "./RewardsSwapper.sol";
-import {BaseHealthCheck} from "@periphery/Bases/HealthCheck/BaseHealthCheck.sol";
+import {RewardsSwapper} from "./utils/RewardsSwapper.sol";
+
 
 /**
  * @title YBRouterStrategy
@@ -47,7 +48,11 @@ contract YBRouterStrategy is BaseHealthCheck {
 
     /// @notice Decimals of the underlying asset token
     uint8 public immutable assetDecimals;
+
     // ===== CONFIGURATION =====
+
+    /// @notice Percentage of buffer to keep to offset losses
+    uint256 public bufferKeepPct;
 
     /// @notice Maximum slippage for deposits (in basis points, e.g., 50 = 0.5%)
     uint256 public maxDepositSlippage;
@@ -55,8 +60,11 @@ contract YBRouterStrategy is BaseHealthCheck {
     /// @notice Maximum slippage for withdrawals (in basis points)
     uint256 public maxWithdrawSlippage;
 
-    uint256 public minLPAmount;
-    uint256 public maxLPAmount;
+    uint256 public maxInvest;
+    uint256 public minInvest;
+    bool public dontInvest;
+    uint256 public availableBufferShares; // vault shares
+    bool public useProfitBuffer;
 
     // ===== CONSTANTS =====
 
@@ -66,6 +74,9 @@ contract YBRouterStrategy is BaseHealthCheck {
 
     event SlippageUpdated(uint256 depositSlippage, uint256 withdrawSlippage);
     event AuctionUpdated(address auction);
+    event AvailableBufferUpdated(uint256 availableBufferBefore, uint256 availableBufferAfter);
+    event BufferKeepPctUpdated(uint256 bufferKeepPct);
+    event Debug(uint256 _debug);
 
     // ===== CONSTRUCTOR =====
 
@@ -94,8 +105,8 @@ contract YBRouterStrategy is BaseHealthCheck {
         assetDecimals = ERC20(_asset).decimals();
         require(assetDecimals <= 18, "Asset decimals must be <= 18");
 
-        minLPAmount = 1e14;
-        maxLPAmount = 50e18;
+        minInvest = 1e14;
+        maxInvest = 50e18;
 
         maxDepositSlippage = 500; // 5%
         maxWithdrawSlippage = 500; // 5%
@@ -112,16 +123,22 @@ contract YBRouterStrategy is BaseHealthCheck {
      * @dev Called automatically after deposits
      */
     function _deployFunds(uint256 _amount) internal override {
-        if (TokenizedStrategy.isShutdown()) return;
-        _amount = _amount > maxLPAmount ? maxLPAmount : _amount;
+        if (dontInvest || TokenizedStrategy.isShutdown()) return;
+        _amount = _amount > maxInvest ? maxInvest : _amount;
         uint256 ltAmount = assetToLt(_amount);
-        if (ltAmount < minLPAmount) return;
+        if (ltAmount < minInvest) return;
         uint256 debtNeeded = _calculateDebtForDeposit(_amount);
         uint256 minShares =
             (ltAmount * (MAX_BPS - maxDepositSlippage)) / MAX_BPS;
         ltToken.deposit(_amount, debtNeeded, minShares, address(this));
         // Always deposit all LTs to yVault
-        yVault.deposit(ltToken.balanceOf(address(this)), address(this));
+        _depositLtBalanceToYVault();
+    }
+
+    function _depositLtBalanceToYVault() internal {
+        uint256 ltBalance = ltToken.balanceOf(address(this));
+        if (ltBalance == 0) return;
+        yVault.deposit(ltBalance, address(this));
     }
 
     /**
@@ -139,7 +156,9 @@ contract YBRouterStrategy is BaseHealthCheck {
         uint256 vaultBalance = yVault.balanceOf(address(this));
         if (vaultBalance == 0) return;
 
-        uint256 vaultSharesToRedeem = _convertAmountToVaultShares(_amount, vaultBalance);
+        uint256 vaultSharesToRedeem = _convertAssetsToVaultShares(_amount);
+        vaultSharesToRedeem = vaultSharesToRedeem > vaultBalance ? vaultBalance : vaultSharesToRedeem;
+
         if (vaultSharesToRedeem == 0) return;
         yVault.redeem(vaultSharesToRedeem, address(this), address(this));
         uint256 ltBalance = ltToken.balanceOf(address(this));
@@ -173,15 +192,37 @@ contract YBRouterStrategy is BaseHealthCheck {
             "LT is Killed"
         );
 
-        // Calculate current balances
-        // LT is deposited in yVault, so we need to check vault balance
+        uint256 currentTotalAssets = TokenizedStrategy.totalAssets();
+        _depositLtBalanceToYVault(); // deposit any loose LT balance into yVault
+        _totalAssets = estimatedTotalAssets();
+        if (_totalAssets > currentTotalAssets) {
+            uint256 amountToSkim = (_totalAssets - currentTotalAssets) * bufferKeepPct / MAX_BPS;
+            if (amountToSkim > 0) {
+                _skimBuffer(amountToSkim);
+                _totalAssets -= amountToSkim;
+            }
+        }
+        else {
+            emit Debug(currentTotalAssets - _totalAssets);
+            uint256 amountDistributed = _distributeBuffer(currentTotalAssets - _totalAssets);
+            emit Debug(currentTotalAssets - _totalAssets);
+            if (amountDistributed > 0) _totalAssets += amountDistributed;
+        }
+    }
+
+    /**
+     * @notice Estimated total assets held by strategy
+     * @dev Uses optimistic price per share
+     * @return _totalAssets Estimated total assets
+     */
+    function estimatedTotalAssets() public view returns (uint256) {
         uint256 vaultShares = yVault.balanceOf(address(this));
-        uint256 ltInVault = yVault.convertToAssets(vaultShares);
-
-        // Convert LT amount to BTC value
-        uint256 btcValueInVault = ltToAsset(ltInVault);
-
-        _totalAssets = btcValueInVault + asset.balanceOf(address(this));
+        // subtract available buffer shares
+        vaultShares = vaultShares > availableBufferShares ? vaultShares - availableBufferShares : 0;
+        uint256 ltInVault;
+        if (vaultShares > 0) ltInVault = yVault.convertToAssets(vaultShares);
+        uint256 assetValue = ltToAsset(ltInVault + ltToken.balanceOf(address(this)));
+        return assetValue + asset.balanceOf(address(this));
     }
 
     // ===== OPTIONAL OVERRIDES =====
@@ -190,7 +231,7 @@ contract YBRouterStrategy is BaseHealthCheck {
         if (ltToken.is_killed()) {
             return 0;
         }
-        return maxLPAmount + asset.balanceOf(address(this));
+        return maxInvest + asset.balanceOf(address(this));
     }
 
     function availableDepositLimit(address _owner) public view override returns (uint256) {
@@ -209,8 +250,12 @@ contract YBRouterStrategy is BaseHealthCheck {
      */
     function _emergencyWithdraw(uint256 _amount) internal override {
         uint256 vaultBalance = yVault.balanceOf(address(this));
-        uint256 vaultSharesToRedeem = _convertAmountToVaultShares(_amount, vaultBalance);
+        // subtract available buffer shares
+        vaultBalance = vaultBalance > availableBufferShares ? vaultBalance - availableBufferShares : 0;
+        uint256 vaultSharesToRedeem = _convertAssetsToVaultShares(_amount);
+        vaultSharesToRedeem = vaultSharesToRedeem > vaultBalance ? vaultBalance : vaultSharesToRedeem;
         if (vaultSharesToRedeem != 0) yVault.redeem(vaultSharesToRedeem, address(this), address(this));
+
         uint256 ltBalance = ltToken.balanceOf(address(this));
         if (ltBalance == 0) return;
         uint256 minAssets =
@@ -231,8 +276,13 @@ contract YBRouterStrategy is BaseHealthCheck {
     ) external onlyManagement {
         maxDepositSlippage = _depositSlippage;
         maxWithdrawSlippage = _withdrawSlippage;
-
         emit SlippageUpdated(_depositSlippage, _withdrawSlippage);
+    }
+
+    function setBufferKeepPct(uint256 _bufferKeepPct) external onlyManagement {
+        require(_bufferKeepPct <= MAX_BPS, "!too high");
+        bufferKeepPct = _bufferKeepPct;
+        emit BufferKeepPctUpdated(_bufferKeepPct);
     }
 
     // ===== INTERNAL HELPERS =====
@@ -274,23 +324,51 @@ contract YBRouterStrategy is BaseHealthCheck {
     }
 
     /**
-     * @notice Calculate vault shares to withdraw for desired BTC amount
-     * @param _assetAmount Desired BTC amount
-     * @param _vaultBalance Current yVault share balance
-     * @return vaultSharesToRedeem Vault shares to redeem
+     * @param _assetAmount amount of assets (BTC)
+     * @return shares Vault shares to redeem
      */
-    function _convertAmountToVaultShares(
-        uint256 _assetAmount,
-        uint256 _vaultBalance
-    ) internal view returns (uint256 vaultSharesToRedeem) {
-        // Convert BTC amount to LT amount needed
+    function _convertAssetsToVaultShares(
+        uint256 _assetAmount
+    ) internal view returns (uint256 shares) {
+        // Convert asset amount to LT amount needed
         uint256 ltNeeded = assetToLt(_assetAmount);
         if (ltNeeded == 0) return 0;
+        shares = yVault.convertToShares(ltNeeded);
+    }
 
-        // Convert LT amount to vault shares needed
-        vaultSharesToRedeem = yVault.convertToShares(ltNeeded);
+    function _convertVaultSharesToAssets(uint256 _vaultShares) internal view returns (uint256 _assets) {
+        if (_vaultShares == 0) return 0;
+        uint256 lts = yVault.convertToAssets(_vaultShares);
+        if (lts == 0) return 0;
+        _assets = ltToAsset(lts);
+    }
 
-        // Clamp to our vault balance
-        if (vaultSharesToRedeem > _vaultBalance) vaultSharesToRedeem = _vaultBalance;
+    function distributeBuffer(uint256 _bufferAssetsToDistribute) external onlyManagement {
+        _distributeBuffer(_bufferAssetsToDistribute);
+    }
+
+    // ===== HEALTH CHECK Functions implementing automatic profit/loss smoothing =====
+
+    function _distributeBuffer(uint256 _bufferAssetsToDistribute) internal returns (uint256 _bufferAssetsUsed) {
+        if (_bufferAssetsToDistribute == 0) return 0;
+        uint256 _bufferSharesToDistribute = _convertAssetsToVaultShares(_bufferAssetsToDistribute);
+        uint256 _availableBufferShares = availableBufferShares;
+        // clamp to available buffer shares
+        _bufferSharesToDistribute = _bufferSharesToDistribute > _availableBufferShares ? _availableBufferShares : _bufferSharesToDistribute;
+        if (_bufferSharesToDistribute == 0) return 0;
+        availableBufferShares -= _bufferSharesToDistribute;
+        emit AvailableBufferUpdated(_availableBufferShares, availableBufferShares);
+        return _convertAssetsToVaultShares(_bufferSharesToDistribute);
+    }
+
+    function _skimBuffer(uint256 _bufferAssetsToSkim) internal {
+        uint256 _bufferSharesToSkim = _convertAssetsToVaultShares(_bufferAssetsToSkim);
+        if (_bufferSharesToSkim == 0) return;
+        availableBufferShares += _bufferSharesToSkim;
+        emit AvailableBufferUpdated(availableBufferShares, availableBufferShares + _bufferSharesToSkim);
+    }
+
+    function availableBufferAssets() public view returns (uint256 _bufferAssets) {
+        return _convertVaultSharesToAssets(availableBufferShares);
     }
 }

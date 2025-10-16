@@ -104,12 +104,13 @@ abstract contract GaugeStrategySetup is Setup, TestHelpers {
 
         // Step 3: Set up vault roles and attach strategy
         vm.startPrank(management);
-        // Role bits: ADD_STRATEGY_MANAGER = 1, DEBT_MANAGER = 64, MAX_DEBT_MANAGER = 128, DEPOSIT_LIMIT_MANAGER = 256
+        // Role bits: ADD_STRATEGY_MANAGER = 1, ACCOUNTANT_MANAGER = 8, DEBT_MANAGER = 64, MAX_DEBT_MANAGER = 128, DEPOSIT_LIMIT_MANAGER = 256
         uint256 ADD_STRATEGY_MANAGER = 1;
+        uint256 ACCOUNTANT_MANAGER = 8;
         uint256 MAX_DEBT_MANAGER = 128;
         uint256 DEBT_MANAGER = 64;
         uint256 DEPOSIT_LIMIT_MANAGER = 256;
-        vault.set_role(management, ADD_STRATEGY_MANAGER | MAX_DEBT_MANAGER | DEBT_MANAGER | DEPOSIT_LIMIT_MANAGER);
+        vault.set_role(management, ADD_STRATEGY_MANAGER | ACCOUNTANT_MANAGER | MAX_DEBT_MANAGER | DEBT_MANAGER | DEPOSIT_LIMIT_MANAGER);
         vault.set_deposit_limit(type(uint256).max);
         vault.add_strategy(deployed);
         vault.update_max_debt_for_strategy(deployed, type(uint256).max);
