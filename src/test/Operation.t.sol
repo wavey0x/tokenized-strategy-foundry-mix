@@ -116,14 +116,10 @@ contract OperationTest is Setup {
 
         uint256 toAirdrop = (_amount * _profitFactor) / MAX_BPS;
         console.log('Airdropping... ', toAirdrop);
-        
-        address rewardUnderlying = strategy.rewardTokenUnderlying();
-        address reward = rewards.rewardToken();
-        deal(rewardUnderlying, address(this), _amount);
-        ERC20(rewardUnderlying).approve(reward, type(uint).max);
-        if (_amount > IVault(reward).deposit_limit() - IVault(reward).totalAssets()) return;
-        IVault(reward).deposit(_amount, address(this));
-        airdrop(ERC20(reward), address(strategy), toAirdrop);
+
+        // Mint properly-backed reward tokens to strategy
+        uint256 shares = mintRewardTokens(address(strategy), toAirdrop);
+        if (shares == 0) return;
 
         // Report profit
         vm.prank(keeper);
@@ -239,13 +235,10 @@ contract OperationTest is Setup {
         skip(1 days);
 
         uint256 toAirdrop = (_amount * _profitFactor) / MAX_BPS;
-        address rewardUnderlying = strategy.rewardTokenUnderlying();
-        address reward = rewards.rewardToken();
-        deal(rewardUnderlying, address(this), toAirdrop*2);
-        ERC20(rewardUnderlying).approve(reward, type(uint).max);
-        if (toAirdrop > IVault(reward).deposit_limit() - IVault(reward).totalAssets()) return;
-        IVault(reward).deposit(toAirdrop, address(this));
-        airdrop(ERC20(reward), address(strategy), toAirdrop);
+
+        // Mint properly-backed reward tokens to strategy
+        uint256 shares = mintRewardTokens(address(strategy), toAirdrop);
+        if (shares == 0) return;
 
         // Report profit
         vm.prank(keeper);
@@ -378,6 +371,7 @@ contract OperationTest is Setup {
         ybs.setWeightedStaker(address(strategy), true);
 
         // Harvest to claim
+        disableHealthCheck(address(strategy));
         vm.prank(keeper);
         strategy.report();
         if(claimable <= strategy.swapThresholds().min){

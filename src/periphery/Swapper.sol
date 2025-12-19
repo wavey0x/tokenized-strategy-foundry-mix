@@ -72,7 +72,7 @@ contract Swapper {
 
     function swap(uint _amount) external returns (uint) {
         tokenIn.safeTransferFrom(msg.sender, address(this), _amount);
-        uint out = pool1.exchange_underlying(pool1InTokenIdx, pool1OutTokenIdx, _amount, 0);
+        uint out = pool1.exchange(pool1InTokenIdx, pool1OutTokenIdx, _amount, 0);
         return pool2.exchange(pool2InTokenIdx, pool2OutTokenIdx, out, 0, msg.sender);
     }
 

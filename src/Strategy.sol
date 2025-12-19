@@ -2,6 +2,7 @@
 pragma solidity ^0.8.18;
 
 import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
+import {BaseHealthCheck} from "@periphery/Bases/HealthCheck/BaseHealthCheck.sol";
 import {CustomStrategyTriggerBase} from "@periphery/ReportTrigger/CustomStrategyTriggerBase.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IYearnBoostedStaker} from "./interfaces/ybs/IYearnBoostedStaker.sol";
@@ -14,10 +15,11 @@ interface IERC4626 {
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
 }
 
-contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
+contract StrategyYBSStaker is BaseHealthCheck, CustomStrategyTriggerBase {
     using SafeERC20 for ERC20;
 
-    address constant public gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+    address public constant gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+    address public constant allocatorVault = 0x1F6f16945e395593d8050d6Cc33e4328a515B648;
     SwapThresholds public swapThresholds;
     ISwapper public swapper;
     bool public bypassClaim;
@@ -42,7 +44,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         ISwapper _swapper,
         uint _swapThresholdMin,
         uint _swapThresholdMax
-    ) BaseStrategy(_asset, _name) {
+    ) BaseHealthCheck(_asset, _name) {
         // Address validation
         require(_ybs.MAX_STAKE_GROWTH_WEEKS() > 0, "Invalid staker");
         require(_rewardsDistributor.staker() == address(_ybs), "Invalid rewards");
@@ -173,6 +175,17 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
 
     function balanceOfReward() public view returns (uint256) {
         return rewardToken.balanceOf(address(this));
+    }
+
+    /// @notice Only allow our vault to deposit to the strategy.
+    function availableDepositLimit(
+        address _owner
+    ) public view override returns (uint256) {
+        if (_owner == allocatorVault) {
+            return type(uint256).max;
+        } else {
+            return 0;
+        }
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
