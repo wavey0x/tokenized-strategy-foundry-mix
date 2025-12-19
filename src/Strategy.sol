@@ -18,8 +18,7 @@ interface IERC4626 {
 contract StrategyYBSStaker is BaseHealthCheck, CustomStrategyTriggerBase {
     using SafeERC20 for ERC20;
 
-    address public constant gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
-    address public constant allocatorVault = 0x1F6f16945e395593d8050d6Cc33e4328a515B648;
+    address public immutable allocatorVault;
     SwapThresholds public swapThresholds;
     ISwapper public swapper;
     bool public bypassClaim;
@@ -39,6 +38,7 @@ contract StrategyYBSStaker is BaseHealthCheck, CustomStrategyTriggerBase {
     constructor(
         address _asset,
         string memory _name,
+        address _allocatorVault,
         IYearnBoostedStaker _ybs,
         IRewardsDistributor _rewardsDistributor,
         ISwapper _swapper,
@@ -52,7 +52,7 @@ contract StrategyYBSStaker is BaseHealthCheck, CustomStrategyTriggerBase {
         ERC20 _rewardToken = ERC20(_rewardsDistributor.rewardToken());
         ERC20 _rewardTokenUnderlying = ERC20(IERC4626(address(_rewardToken)).asset());
         require(_rewardTokenUnderlying == _swapper.tokenIn(), "Invalid rewards");
-        
+        allocatorVault = _allocatorVault;
         ybs = _ybs;
         rewardsDistributor = _rewardsDistributor;
         swapper = _swapper;
@@ -137,8 +137,7 @@ contract StrategyYBSStaker is BaseHealthCheck, CustomStrategyTriggerBase {
         swapThresholds.max = uint112(_swapThresholdMax);
     }
 
-    function upgradeSwapper(ISwapper _swapper) external {
-        require(msg.sender == gov, "!authorized");
+    function upgradeSwapper(ISwapper _swapper) external onlyManagement {
         require(_swapper.tokenOut() == asset, "Invalid Swapper");
         require(_swapper.tokenIn() == rewardTokenUnderlying);
         rewardTokenUnderlying.forceApprove(address(swapper), 0);

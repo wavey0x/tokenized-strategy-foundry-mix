@@ -38,4 +38,6 @@ interface IYBSRegistry {
     function acceptOwnership() external;
     
     function isApprovedDeployer(address _deployer) external view returns (bool);
+    
+    function owner() external view returns (address);
 }

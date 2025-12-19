@@ -98,15 +98,15 @@ contract Setup is ExtendedTest, IEvents {
 
     function setUpStrategy() public returns (address) {
         // we save the strategy as a IStrategyInterface to give it the needed interface
-        address gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+        address allocatorVault = 0x1F6f16945e395593d8050d6Cc33e4328a515B648;
 
         IYBSRegistry registry = IYBSRegistry(0x262be1d31d0754399d8d5dc63B99c22146E9f738);
-        vm.prank(gov);
-
         (address ybsAddress, address rewardsAddress, address utilsAddress) = registry.deployments(
             address(asset)
         );
         if (ybsAddress == address(0)){
+            address owner = IYBSRegistry(0x262be1d31d0754399d8d5dc63B99c22146E9f738).owner();
+            vm.prank(owner);
             (ybsAddress, rewardsAddress, utilsAddress) = registry.createNewDeployment(
                 address(asset), 
                 4, 
@@ -135,6 +135,7 @@ contract Setup is ExtendedTest, IEvents {
                 new StrategyYBSStaker(
                     address(asset), 
                     "Tokenized Strategy",
+                    allocatorVault,
                     ybs,
                     rewards,
                     swapper,
