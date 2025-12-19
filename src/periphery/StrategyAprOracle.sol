@@ -5,6 +5,7 @@ import {AprOracleBase} from "@periphery/AprOracle/AprOracleBase.sol";
 import {IYBSUtilities} from "../interfaces/ybs/IYBSUtilities.sol";
 import {IVault} from "@yearn-vaults/interfaces/IVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ICurve} from "../interfaces/curve/ICurve.sol";
 
 /// @title YBS Strategy APR Oracle
 /// @notice Calculates APR from YBS staking rewards plus additional donations
@@ -13,6 +14,9 @@ contract StrategyAprOracle is AprOracleBase {
         IYBSUtilities(0xb70E1CBFf4DFf345b3Aa832CC1C03cA26766AD55);
     address public immutable YYB;
     address public immutable VAULT;
+    address public immutable POOL_CRVUSD_YB;
+    address public immutable POOL_YB_YYB;
+    address public immutable REWARD_TOKEN;
 
     /// @notice Address authorized to auto-fund each epoch
     address public funder;
@@ -23,18 +27,26 @@ contract StrategyAprOracle is AprOracleBase {
     /// @notice Whether auto-funding occurred for an epoch
     mapping(uint256 => bool) public epochAutoFunded;
 
-    constructor(address _vault, address _funder, uint256 _fundAmount)
-        AprOracleBase("YBS Staker Apr Oracle", msg.sender)
-    {
+    constructor(
+        address _vault,
+        address _poolCrvusdYb,
+        address _poolYbYyb,
+        address _rewardToken,
+        address _funder,
+        uint256 _fundAmount
+    ) AprOracleBase("YBS Staker Apr Oracle", msg.sender) {
         VAULT = _vault;
         YYB = IVault(_vault).asset();
+        POOL_CRVUSD_YB = _poolCrvusdYb;
+        POOL_YB_YYB = _poolYbYyb;
+        REWARD_TOKEN = _rewardToken;
         funder = _funder;
         fundAmount = _fundAmount;
     }
 
     /// @notice Returns expected APR including YBS rewards and donations
     /// @param _strategy The strategy address
-    /// @param _delta Unused (YBS APR doesn't change with debt)
+    /// @param _delta Change in debt (positive = increase, negative = decrease)
     /// @return apr Annual percentage rate (1e18 = 100%)
     function aprAfterDebtChange(
         address _strategy,
@@ -47,6 +59,13 @@ contract StrategyAprOracle is AprOracleBase {
         );
 
         uint256 totalAssets = IVault(VAULT).totalAssets();
+        if (_delta > 0) {
+            totalAssets += uint256(_delta);
+        } else if (_delta < 0) {
+            uint256 decrease = uint256(-_delta);
+            totalAssets = totalAssets > decrease ? totalAssets - decrease : 0;
+        }
+
         if (totalAssets > 0) {
             // APR = (weeklyAmount / totalAssets) * 52 weeks
             uint256 additionalApr = amountPerEpoch[getEpoch()] * 52 * 1e18 / totalAssets;
@@ -94,11 +113,18 @@ contract StrategyAprOracle is AprOracleBase {
         return IVault(VAULT).default_queue(0);
     }
 
-    function _getStakeTokenPrice() internal view virtual returns (uint256) {
-        return 1e18;
+    /// @notice YYB price in crvUSD terms
+    function getStakeTokenPrice() public view virtual returns (uint256) {
+        // YB price in crvUSD (coin[1]/coin[0])
+        uint256 ybPriceInCrvusd = ICurve(POOL_CRVUSD_YB).price_oracle();
+        // YYB price in YB (coin[1]/coin[0])
+        uint256 yybPriceInYb = ICurve(POOL_YB_YYB).price_oracle(0);
+        // YYB price in crvUSD
+        return ybPriceInCrvusd * yybPriceInYb / 1e18;
     }
 
-    function _getRewardTokenPrice() internal view virtual returns (uint256) {
-        return 1e18;
+    /// @notice yvcrvUSD-2 price in crvUSD terms
+    function getRewardTokenPrice() public view virtual returns (uint256) {
+        return IVault(REWARD_TOKEN).pricePerShare();
     }
 }

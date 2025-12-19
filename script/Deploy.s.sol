@@ -82,6 +82,9 @@ contract DeployStrategy is Script {
         // Deploy APR Oracle
         StrategyAprOracle aprOracle = new StrategyAprOracle(
             ALLOCATOR_VAULT,                    // vault
+            POOL_CRVUSD_YB,                     // poolCrvusdYb
+            POOL_YB_YYB,                        // poolYbYyb
+            YVCRVUSD,                           // rewardToken
             APR_ORACLE_FUNDER,                  // funder
             APR_ORACLE_FUND_AMOUNT              // fundAmount
         );

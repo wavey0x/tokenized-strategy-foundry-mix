@@ -11,7 +11,7 @@ contract TestableAprOracle is StrategyAprOracle {
     uint256 public testTotalAssets;
 
     constructor(address _vault, address _funder, uint256 _fundAmount)
-        StrategyAprOracle(_vault, _funder, _fundAmount) {}
+        StrategyAprOracle(_vault, address(0), address(0), address(0), _funder, _fundAmount) {}
 
     function setTestStrategy(address _strategy) external {
         testStrategy = _strategy;
@@ -36,10 +36,26 @@ contract TestableAprOracle is StrategyAprOracle {
         );
 
         uint256 totalAssets = testTotalAssets;
+        if (_delta > 0) {
+            totalAssets += uint256(_delta);
+        } else if (_delta < 0) {
+            uint256 decrease = uint256(-_delta);
+            totalAssets = totalAssets > decrease ? totalAssets - decrease : 0;
+        }
+
         if (totalAssets > 0) {
             uint256 additionalApr = amountPerEpoch[getEpoch()] * 52 * 1e18 / totalAssets;
             apr += additionalApr;
         }
+    }
+
+    // Mock prices for testing (both 1:1 with crvUSD)
+    function _getStakeTokenPrice() internal view override returns (uint256) {
+        return 1e18;
+    }
+
+    function _getRewardTokenPrice() internal view override returns (uint256) {
+        return 1e18;
     }
 }
 
