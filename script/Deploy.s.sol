@@ -11,14 +11,12 @@ import {IRewardsDistributor} from "../src/interfaces/ybs/IRewardsDistributor.sol
 import {ISwapper} from "../src/interfaces/utils/ISwapper.sol";
 import {ICurve} from "../src/interfaces/curve/ICurve.sol";
 import {ICurveInt128} from "../src/interfaces/curve/ICurveInt128.sol";
-import {StrategyAprOracle} from "../src/periphery/StrategyAprOracle.sol";
 
 contract DeployStrategy is Script {
     // Token addresses
     address constant YYB = 0x22222222aEA0076fCA927a3f44dc0B4FdF9479D6;
     address constant YB = 0x01791F726B4103694969820be083196cC7c045fF;
     address constant CRVUSD = 0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E;
-    address constant YVCRVUSD = 0xBF319dDC2Edc1Eb6FDf9910E39b37Be221C8805F;
 
     // Protocol addresses
     address constant YBS_REGISTRY = 0x262be1d31d0754399d8d5dc63B99c22146E9f738;
@@ -31,10 +29,6 @@ contract DeployStrategy is Script {
     // Swap thresholds
     uint256 constant SWAP_THRESHOLD_MIN = 1e18;
     uint256 constant SWAP_THRESHOLD_MAX = 1_000_000e18;
-
-    // APR Oracle
-    address constant APR_ORACLE_FUNDER = 0x4444AAAACDBa5580282365e25b16309Bd770ce4a;
-    uint256 constant APR_ORACLE_FUND_AMOUNT = 5_000e18;
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -78,17 +72,6 @@ contract DeployStrategy is Script {
             SWAP_THRESHOLD_MAX                  // swapThresholdMax
         );
         console.log("Strategy deployed at:", address(strategy));
-
-        // Deploy APR Oracle
-        StrategyAprOracle aprOracle = new StrategyAprOracle(
-            ALLOCATOR_VAULT,                    // vault
-            POOL_CRVUSD_YB,                     // poolCrvusdYb
-            POOL_YB_YYB,                        // poolYbYyb
-            YVCRVUSD,                           // rewardToken
-            APR_ORACLE_FUNDER,                  // funder
-            APR_ORACLE_FUND_AMOUNT              // fundAmount
-        );
-        console.log("APR Oracle deployed at:", address(aprOracle));
 
         vm.stopBroadcast();
     }

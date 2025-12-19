@@ -54,8 +54,8 @@ contract StrategyAprOracle is AprOracleBase {
     ) external view virtual override returns (uint256 apr) {
         apr = YBS_UTILS.getUserActiveApr(
             _strategy,
-            _getStakeTokenPrice(),
-            _getRewardTokenPrice()
+            getStakeTokenPrice(),
+            getRewardTokenPrice()
         );
 
         uint256 totalAssets = IVault(VAULT).totalAssets();

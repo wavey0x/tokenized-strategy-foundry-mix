@@ -31,8 +31,8 @@ contract TestableAprOracle is StrategyAprOracle {
     ) external view override returns (uint256 apr) {
         apr = YBS_UTILS.getUserActiveApr(
             _strategy,
-            _getStakeTokenPrice(),
-            _getRewardTokenPrice()
+            getStakeTokenPrice(),
+            getRewardTokenPrice()
         );
 
         uint256 totalAssets = testTotalAssets;
@@ -50,11 +50,11 @@ contract TestableAprOracle is StrategyAprOracle {
     }
 
     // Mock prices for testing (both 1:1 with crvUSD)
-    function _getStakeTokenPrice() internal view override returns (uint256) {
+    function getStakeTokenPrice() public view override returns (uint256) {
         return 1e18;
     }
 
-    function _getRewardTokenPrice() internal view override returns (uint256) {
+    function getRewardTokenPrice() public view override returns (uint256) {
         return 1e18;
     }
 }
