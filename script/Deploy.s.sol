@@ -88,17 +88,5 @@ contract DeployStrategy is Script {
         console.log("APR Oracle deployed at:", address(aprOracle));
 
         vm.stopBroadcast();
-
-        console.log("");
-        console.log("=== Deployment Summary ===");
-        console.log("Swapper:", address(swapper));
-        console.log("Strategy:", address(strategy));
-        console.log("APR Oracle:", address(aprOracle));
-        console.log("");
-        console.log("Next steps:");
-        console.log("1. Set keeper: strategy.setKeeper(keeperAddress)");
-        console.log("2. Set performance fee recipient: strategy.setPerformanceFeeRecipient(recipientAddress)");
-        console.log("3. Transfer management: strategy.setPendingManagement(newManagement)");
-        console.log("4. Accept management from new address: strategy.acceptManagement()");
     }
 }

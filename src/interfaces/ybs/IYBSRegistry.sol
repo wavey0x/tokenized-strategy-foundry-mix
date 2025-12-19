@@ -18,7 +18,7 @@ interface IYBSRegistry {
 
     // Function signatures
     function approveDeployer(address _deployer, bool _approved) external;
-    function deployments(address token) external returns(address yearnBoostedStaker, address rewardDistributor, address utilities);
+    function deployments(address token) external view returns(address yearnBoostedStaker, address rewardDistributor, address utilities);
     
     function createNewDeployment(
         address _token,
