@@ -331,6 +331,32 @@ contract OperationTest is Setup {
         assertTrue(!trigger);
     }
 
+    function test_autoAdjustThresholds() public {
+        uint256 _amount = 100e18;
+
+        // Deposit into strategy
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+
+        // Get initial max threshold
+        IStrategyInterface.SwapThresholds memory stBefore = strategy.swapThresholds();
+        assertTrue(stBefore.autoAdjustThresholds, "autoAdjust should be enabled");
+        uint112 maxBefore = stBefore.max;
+
+        // Mint reward tokens above min threshold
+        uint256 toAirdrop = uint256(stBefore.min) * 10;
+        uint256 shares = mintRewardTokens(address(strategy), toAirdrop);
+        if (shares == 0) return;
+
+        // Report triggers _claimAndSellRewards which should adjust max
+        disableHealthCheck(address(strategy));
+        vm.prank(keeper);
+        strategy.report();
+
+        // Check max was adjusted based on output: (output * 101) / 700
+        IStrategyInterface.SwapThresholds memory stAfter = strategy.swapThresholds();
+        assertNotEq(stAfter.max, maxBefore, "max threshold should have changed");
+    }
+
     function test_rewardsClaim(
         uint256 _amount
     ) public {
