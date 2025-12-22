@@ -35,6 +35,15 @@ contract TestableAprOracle is StrategyAprOracle {
             getRewardTokenPrice()
         );
 
+        // Fallback to projected APR if active is 0
+        if (apr == 0) {
+            apr = YBS_UTILS.getUserProjectedApr(
+                _strategy,
+                getStakeTokenPrice(),
+                getRewardTokenPrice()
+            );
+        }
+
         uint256 totalAssets = testTotalAssets;
         if (_delta > 0) {
             totalAssets += uint256(_delta);
@@ -47,6 +56,14 @@ contract TestableAprOracle is StrategyAprOracle {
             uint256 additionalApr = amountPerEpoch[getEpoch()] * 52 * 1e18 / totalAssets;
             apr += additionalApr;
         }
+
+        // Floor check (will be 0 in tests)
+        uint256 unlockingApr = getVaultUnlockingApr();
+        apr = unlockingApr > apr ? unlockingApr : apr;
+    }
+
+    function getVaultUnlockingApr() public pure override returns (uint256) {
+        return 0; // No floor in tests
     }
 
     // Mock prices for testing (both 1:1 with crvUSD)

@@ -6,12 +6,15 @@ import {IYBSUtilities} from "../interfaces/ybs/IYBSUtilities.sol";
 import {IVault} from "@yearn-vaults/interfaces/IVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ICurve} from "../interfaces/curve/ICurve.sol";
+import {IAprOracleRegistry} from "../interfaces/utils/IAprOracleRegistry.sol";
 
 /// @title YBS Strategy APR Oracle
 /// @notice Calculates APR from YBS staking rewards plus additional donations
 contract StrategyAprOracle is AprOracleBase {
     IYBSUtilities public constant YBS_UTILS =
         IYBSUtilities(0xb70E1CBFf4DFf345b3Aa832CC1C03cA26766AD55);
+    IAprOracleRegistry public constant APR_ORACLE_REGISTRY = 
+        IAprOracleRegistry(0x1981AD9F44F2EA9aDd2dC4AD7D075c102C70aF92);
     address public immutable YYB;
     address public immutable VAULT;
     address public immutable POOL_CRVUSD_YB;
@@ -58,6 +61,14 @@ contract StrategyAprOracle is AprOracleBase {
             getRewardTokenPrice()
         );
 
+        if (apr == 0) {
+            apr = YBS_UTILS.getUserProjectedApr(
+                _strategy,
+                getStakeTokenPrice(),
+                getRewardTokenPrice()
+            );
+        }
+
         uint256 totalAssets = IVault(VAULT).totalAssets();
         if (_delta > 0) {
             totalAssets += uint256(_delta);
@@ -71,6 +82,9 @@ contract StrategyAprOracle is AprOracleBase {
             uint256 additionalApr = amountPerEpoch[getEpoch()] * 52 * 1e18 / totalAssets;
             apr += additionalApr;
         }
+
+        uint256 unlockingApr = getVaultUnlockingApr();
+        apr = unlockingApr > apr ? unlockingApr : apr;
     }
 
     /// @notice Donate rewards for current epoch
@@ -126,5 +140,9 @@ contract StrategyAprOracle is AprOracleBase {
     /// @notice yvcrvUSD-2 price in crvUSD terms
     function getRewardTokenPrice() public view virtual returns (uint256) {
         return IVault(REWARD_TOKEN).pricePerShare();
+    }
+
+    function getVaultUnlockingApr() public view virtual returns (uint256) {
+        return APR_ORACLE_REGISTRY.getCurrentApr(VAULT);
     }
 }
