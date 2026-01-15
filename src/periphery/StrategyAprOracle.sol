@@ -117,9 +117,9 @@ contract StrategyAprOracle is AprOracleBase {
         amountPerEpoch[getEpoch()] += _amount;
     }
 
-    /// @notice Get current epoch (week-aligned timestamp)
+    /// @notice Get current epoch (YBS-aligned timestamp)
     function getEpoch() public view returns (uint256) {
-        return block.timestamp / 7 days * 7 days;
+        return YBS_UTILS.getWeek();
     }
 
     /// @notice Get strategy from vault's default queue
