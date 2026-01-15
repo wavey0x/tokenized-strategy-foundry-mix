@@ -10,6 +10,8 @@ interface ICurve {
 
     // StableSwap functions
     function last_price() external view returns (uint256);
+    function price_oracle() external view returns(uint256);
+    function price_oracle(uint256) external view returns(uint256);
     function ema_price() external view returns (uint256);
     function get_balances() external view returns (uint256[2] memory);
     function admin_fee() external view returns (uint256);
@@ -21,6 +23,7 @@ interface ICurve {
     function remove_liquidity(uint256 _burn_amount, uint256[2] memory _min_amounts, address _receiver) external returns (uint256[2] memory);
     function get_dy(uint256 i, uint256 j, uint256 dx) external view returns (uint256);
     function coins(uint256) external view returns (address);
+    function exchange(uint256 i, uint256 j, uint256 _dx, uint256 _min_dy) external returns (uint256);
     function exchange(uint256 i, uint256 j, uint256 _dx, uint256 _min_dy, address _receiver) external returns (uint256);
     function exchange_underlying(uint256 i, uint256 j, uint256 _dx, uint256 _min_dy, address _receiver) external returns (uint256);
     function exchange_underlying(uint256 i, uint256 j, uint256 _dx, uint256 _min_dy) external returns (uint256);

@@ -53,24 +53,24 @@ contract SwapperTest is Setup {
     function test_swapperUpgrade() public {
         // Deploy new swapper
         ISwapper swapper2 = ISwapper(address(new Swapper(
-            ERC20(tokenAddrs["MKUSD"]),   // token in
+            ERC20(tokenAddrs["CRVUSD"]),   // token in
             ERC20(asset),                 // token out
-            ICurve(0x9D8108DDD8aD1Ee89d527C0C9e928Cb9D2BBa2d3), // pool 1 mkusd/crvusd
-            ERC20(tokenAddrs["PRISMA"]),  // token out pool 1
-            ICurveInt128(0x69833361991ed76f9e8DBBcdf9ea1520fEbFb4a7) // pool 2 prisma/yprisma
+            ICurve(0xec977F46467a3021785Cff88894886E617abd65b), // pool 1 crvUSD/YB
+            ERC20(tokenAddrs["YB"]),  // token out pool 1
+            ICurveInt128(0x5Ee9606e5611Fd6CE14BD2BC12db70BD53dC9daA) // pool 2 YB/YYB
         )));
         // Upgrade swapper in strategy
-        vm.prank(strategy.gov());
+        vm.prank(management);
         strategy.upgradeSwapper(swapper2);
         
         // Test approvals are all correct
         assertEq(
-            ERC20(tokenAddrs["MKUSD"]).allowance(address(strategy), address(swapper)), 
+            ERC20(tokenAddrs["CRVUSD"]).allowance(address(strategy), address(swapper)), 
             0, 
             "Allowance should be zeroed"
         );
         assertEq(
-            ERC20(tokenAddrs["MKUSD"]).allowance(address(strategy), address(swapper2)), 
+            ERC20(tokenAddrs["CRVUSD"]).allowance(address(strategy), address(swapper2)), 
             type(uint).max, 
             "Allowance should be max"
         );

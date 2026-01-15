@@ -2,6 +2,7 @@
 pragma solidity ^0.8.18;
 
 import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
+import {BaseHealthCheck} from "@periphery/Bases/HealthCheck/BaseHealthCheck.sol";
 import {CustomStrategyTriggerBase} from "@periphery/ReportTrigger/CustomStrategyTriggerBase.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IYearnBoostedStaker} from "./interfaces/ybs/IYearnBoostedStaker.sol";
@@ -14,10 +15,10 @@ interface IERC4626 {
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
 }
 
-contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
+contract StrategyYBSStaker is BaseHealthCheck, CustomStrategyTriggerBase {
     using SafeERC20 for ERC20;
 
-    address constant public gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+    address public immutable allocatorVault;
     SwapThresholds public swapThresholds;
     ISwapper public swapper;
     bool public bypassClaim;
@@ -32,17 +33,19 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
     struct SwapThresholds {
         uint112 min;
         uint112 max;
+        bool autoAdjustThresholds;
     }
 
     constructor(
         address _asset,
         string memory _name,
+        address _allocatorVault,
         IYearnBoostedStaker _ybs,
         IRewardsDistributor _rewardsDistributor,
         ISwapper _swapper,
         uint _swapThresholdMin,
         uint _swapThresholdMax
-    ) BaseStrategy(_asset, _name) {
+    ) BaseHealthCheck(_asset, _name) {
         // Address validation
         require(_ybs.MAX_STAKE_GROWTH_WEEKS() > 0, "Invalid staker");
         require(_rewardsDistributor.staker() == address(_ybs), "Invalid rewards");
@@ -50,7 +53,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         ERC20 _rewardToken = ERC20(_rewardsDistributor.rewardToken());
         ERC20 _rewardTokenUnderlying = ERC20(IERC4626(address(_rewardToken)).asset());
         require(_rewardTokenUnderlying == _swapper.tokenIn(), "Invalid rewards");
-        
+        allocatorVault = _allocatorVault;
         ybs = _ybs;
         rewardsDistributor = _rewardsDistributor;
         swapper = _swapper;
@@ -60,7 +63,7 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         ERC20(_asset).forceApprove(address(_ybs), type(uint).max);
         _rewardTokenUnderlying.forceApprove(address(_swapper), type(uint).max);
 
-        _setSwapThresholds(_swapThresholdMin, _swapThresholdMax);
+        _setSwapThresholds(_swapThresholdMin, _swapThresholdMax, true);
     }
 
     function _deployFunds(uint256 _amount) internal override {
@@ -94,6 +97,13 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         if (rewardBalance > st.min) {
             // Redeem the full balance at once to avoid unnecessary costly withdrawals.
             IERC4626(address(rewardToken)).redeem(rewardBalance, address(this), address(this));
+
+            // Auto-adjust max threshold based on weekly output
+            if (st.autoAdjustThresholds) {
+                uint256 output = rewardTokenUnderlying.balanceOf(address(this));
+                swapThresholds.max = uint112((output * 101) / 700);
+                st.max = swapThresholds.max;
+            }
         }
 
         uint256 toSwap = rewardTokenUnderlying.balanceOf(address(this));
@@ -124,19 +134,19 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
         bypassMaxStake = _bypassMaxStake;
     }
 
-    function setSwapThresholds(uint256 _swapThresholdMin, uint256 _swapThresholdMax) external onlyManagement {
-        _setSwapThresholds(_swapThresholdMin, _swapThresholdMax);
+    function setSwapThresholds(uint256 _swapThresholdMin, uint256 _swapThresholdMax, bool _autoAdjustThresholds) external onlyManagement {
+        _setSwapThresholds(_swapThresholdMin, _swapThresholdMax, _autoAdjustThresholds);
     }
 
-    function _setSwapThresholds(uint256 _swapThresholdMin, uint256 _swapThresholdMax) internal {
+    function _setSwapThresholds(uint256 _swapThresholdMin, uint256 _swapThresholdMax, bool _autoAdjustThresholds) internal {
         require(_swapThresholdMax < type(uint112).max);
         require(_swapThresholdMin < _swapThresholdMax);
         swapThresholds.min = uint112(_swapThresholdMin);
         swapThresholds.max = uint112(_swapThresholdMax);
+        swapThresholds.autoAdjustThresholds = _autoAdjustThresholds;
     }
 
-    function upgradeSwapper(ISwapper _swapper) external {
-        require(msg.sender == gov, "!authorized");
+    function upgradeSwapper(ISwapper _swapper) external onlyManagement {
         require(_swapper.tokenOut() == asset, "Invalid Swapper");
         require(_swapper.tokenIn() == rewardTokenUnderlying);
         rewardTokenUnderlying.forceApprove(address(swapper), 0);
@@ -173,6 +183,17 @@ contract Strategy is BaseStrategy, CustomStrategyTriggerBase {
 
     function balanceOfReward() public view returns (uint256) {
         return rewardToken.balanceOf(address(this));
+    }
+
+    /// @notice Only allow our vault to deposit to the strategy.
+    function availableDepositLimit(
+        address _owner
+    ) public view override returns (uint256) {
+        if (_owner == allocatorVault) {
+            return type(uint256).max;
+        } else {
+            return 0;
+        }
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {

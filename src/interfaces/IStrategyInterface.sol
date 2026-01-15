@@ -8,6 +8,7 @@ interface IStrategyInterface is IStrategy {
     struct SwapThresholds {
         uint112 min;
         uint112 max;
+        bool autoAdjustThresholds;
     }
     function gov() external view returns (address);
     function rewardToken() external view returns (address);

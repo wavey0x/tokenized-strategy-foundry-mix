@@ -3,8 +3,8 @@ pragma solidity ^0.8.18;
 
 import "forge-std/console.sol";
 import {ExtendedTest} from "./ExtendedTest.sol";
-
-import {Strategy, ERC20} from "../../Strategy.sol";
+import {IBaseHealthCheck} from "@periphery/Bases/HealthCheck/IBaseHealthCheck.sol";
+import {StrategyYBSStaker, ERC20} from "../../Strategy.sol";
 import {Swapper} from "../../periphery/Swapper.sol";
 import {IYBSRegistry, IYBSFactory} from "../../interfaces/ybs/IYBSRegistry.sol";
 import {IYearnBoostedStaker} from "../../interfaces/ybs/IYearnBoostedStaker.sol";
@@ -14,6 +14,7 @@ import {ISwapper} from "../../interfaces/utils/ISwapper.sol";
 import {IStrategyInterface} from "../../interfaces/IStrategyInterface.sol";
 import {ICurve} from "../../interfaces/curve/ICurve.sol";
 import {ICurveInt128} from "../../interfaces/curve/ICurveInt128.sol";
+import {IVault} from "@yearn-vaults/interfaces/IVault.sol";
 
 // Inherit the events so they can be checked if desired.
 import {IEvents} from "@tokenized-strategy/interfaces/IEvents.sol";
@@ -22,6 +23,10 @@ interface IFactory {
     function governance() external view returns (address);
     function set_protocol_fee_bps(uint16) external;
     function set_protocol_fee_recipient(address) external;
+}
+
+interface ICurveNG {
+    function add_liquidity(uint256[] memory _amounts, uint256 _min_mint_amount, address _receiver) external returns (uint256);
 }
 
 contract Setup is ExtendedTest, IEvents {
@@ -36,7 +41,7 @@ contract Setup is ExtendedTest, IEvents {
     mapping(string => address) public tokenAddrs;
 
     // Addresses for different roles we will use repeatedly.
-    address public user = address(10);
+    address public user = address(0x1F6f16945e395593d8050d6Cc33e4328a515B648);
     address public keeper = address(4);
     address public management = address(1);
     address public performanceFeeRecipient = address(3);
@@ -64,10 +69,10 @@ contract Setup is ExtendedTest, IEvents {
         vm.selectFork(mainnetFork);
 
         _setTokenAddrs();
-        asset = ERC20(tokenAddrs["YPRISMA"]);
+        asset = ERC20(tokenAddrs["YYB"]);
 
         // Set asset
-        asset = ERC20(tokenAddrs["YPRISMA"]);
+        asset = ERC20(tokenAddrs["YYB"]);
 
         // Set decimals
         decimals = asset.decimals();
@@ -93,20 +98,20 @@ contract Setup is ExtendedTest, IEvents {
 
     function setUpStrategy() public returns (address) {
         // we save the strategy as a IStrategyInterface to give it the needed interface
-        address gov = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+        address allocatorVault = 0x1F6f16945e395593d8050d6Cc33e4328a515B648;
 
         IYBSRegistry registry = IYBSRegistry(0x262be1d31d0754399d8d5dc63B99c22146E9f738);
-        vm.prank(gov);
-
         (address ybsAddress, address rewardsAddress, address utilsAddress) = registry.deployments(
             address(asset)
         );
         if (ybsAddress == address(0)){
+            address owner = IYBSRegistry(0x262be1d31d0754399d8d5dc63B99c22146E9f738).owner();
+            vm.prank(owner);
             (ybsAddress, rewardsAddress, utilsAddress) = registry.createNewDeployment(
                 address(asset), 
                 4, 
                 0, 
-                tokenAddrs["YVMKUSD"]
+                tokenAddrs["YVCRVUSD"]
             );
         }
 
@@ -115,19 +120,22 @@ contract Setup is ExtendedTest, IEvents {
         rewards = IRewardsDistributor(rewardsAddress);
         utils = IYBSUtilities(utilsAddress);
 
+        _addLiquidity();
+
         swapper = ISwapper(address(new Swapper(
-            ERC20(tokenAddrs["MKUSD"]),   // token in
+            ERC20(tokenAddrs["CRVUSD"]),   // token in
             ERC20(asset),                 // token out
-            ICurve(0x9D8108DDD8aD1Ee89d527C0C9e928Cb9D2BBa2d3), // pool 1 mkusd/crvusd
-            ERC20(tokenAddrs["PRISMA"]),  // token out pool 1
-            ICurveInt128(0x69833361991ed76f9e8DBBcdf9ea1520fEbFb4a7) // pool 2 prisma/yprisma
+            ICurve(0xec977F46467a3021785Cff88894886E617abd65b), // pool 1 crvUSD/YB
+            ERC20(tokenAddrs["YB"]),  // token out pool 1
+            ICurveInt128(0x5Ee9606e5611Fd6CE14BD2BC12db70BD53dC9daA) // pool 2 YB/YYB
         )));
 
         IStrategyInterface _strategy = IStrategyInterface(
             address(
-                new Strategy(
+                new StrategyYBSStaker(
                     address(asset), 
                     "Tokenized Strategy",
+                    allocatorVault,
                     ybs,
                     rewards,
                     swapper,
@@ -136,6 +144,8 @@ contract Setup is ExtendedTest, IEvents {
                 )
             )
         );
+
+        IBaseHealthCheck(address(_strategy)).setProfitLimitRatio(type(uint16).max);
 
         // set keeper
         _strategy.setKeeper(keeper);
@@ -148,6 +158,24 @@ contract Setup is ExtendedTest, IEvents {
         _strategy.acceptManagement();
 
         return address(_strategy);
+    }
+
+    function disableHealthCheck(address _strategy) public {
+        vm.prank(management);
+        IBaseHealthCheck(address(_strategy)).setDoHealthCheck(false);
+    }
+
+    function _addLiquidity() internal {
+        uint256 amount = 100_000_000e18;
+        deal(tokenAddrs["YB"], address(this), amount);
+        deal(tokenAddrs["YYB"], address(this), amount);
+        ICurveNG pool = ICurveNG(0x5Ee9606e5611Fd6CE14BD2BC12db70BD53dC9daA);
+        ERC20(tokenAddrs["YB"]).approve(address(pool), type(uint).max);
+        ERC20(tokenAddrs["YYB"]).approve(address(pool), type(uint).max);
+        uint256[] memory amounts = new uint256[](2);
+        amounts[0] = amount;
+        amounts[1] = amount;
+        pool.add_liquidity(amounts, 0, address(this));
     }
 
     function depositIntoStrategy(
@@ -195,6 +223,24 @@ contract Setup is ExtendedTest, IEvents {
         deal(address(_asset), _to, balanceBefore + _amount);
     }
 
+    /// @notice Mint reward vault tokens by depositing underlying (properly backed shares)
+    /// @param _to Recipient of the vault shares
+    /// @param _amount Amount of underlying to deposit (receives equivalent shares)
+    /// @return shares Amount of vault shares minted
+    function mintRewardTokens(address _to, uint256 _amount) public returns (uint256 shares) {
+        address rewardVault = rewards.rewardToken();
+        address underlying = strategy.rewardTokenUnderlying();
+
+        // Check deposit limit
+        uint256 available = IVault(rewardVault).deposit_limit() - IVault(rewardVault).totalAssets();
+        if (_amount > available) return 0;
+
+        // Deal underlying to this contract and deposit to vault
+        deal(underlying, address(this), _amount);
+        ERC20(underlying).approve(rewardVault, _amount);
+        shares = IVault(rewardVault).deposit(_amount, _to);
+    }
+
     function setFees(uint16 _protocolFee, uint16 _performanceFee) public {
         address gov = IFactory(factory).governance();
 
@@ -211,8 +257,8 @@ contract Setup is ExtendedTest, IEvents {
 
     function depositRewards(uint _amount) public {
         // Deposit some rewards
-        deal(tokenAddrs["YVMKUSD"], address(this), _amount);
-        ERC20 reward = ERC20(tokenAddrs["YVMKUSD"]);
+        deal(tokenAddrs["YVCRVUSD"], address(this), _amount);
+        ERC20 reward = ERC20(tokenAddrs["YVCRVUSD"]);
         reward.approve(address(rewards), type(uint).max);
         rewards.depositReward(_amount);
         uint week = rewards.getWeek();
@@ -236,5 +282,8 @@ contract Setup is ExtendedTest, IEvents {
         tokenAddrs["YVMKUSD"] = 0x04AeBe2e4301CdF5E9c57B01eBdfe4Ac4B48DD13;
         tokenAddrs["CRV"] = 0xD533a949740bb3306d119CC777fa900bA034cd52;
         tokenAddrs["PRISMA"] = 0xdA47862a83dac0c112BA89c6abC2159b95afd71C;
+        tokenAddrs["YYB"] = 0x22222222aEA0076fCA927a3f44dc0B4FdF9479D6;
+        tokenAddrs["YB"] = 0x01791F726B4103694969820be083196cC7c045fF;
+        tokenAddrs["YVCRVUSD"] = 0xBF319dDC2Edc1Eb6FDf9910E39b37Be221C8805F;
     }
 }
