@@ -18,7 +18,7 @@ contract DeploySwapper is Script {
     address constant POOL_YB_YYB = 0x5Ee9606e5611Fd6CE14BD2BC12db70BD53dC9daA;
 
     // Management address
-    address constant MANAGEMENT = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+    address constant MANAGEMENT = 0x16388463d60FFE0661Cf7F1f31a7D658aC790ff7;
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
