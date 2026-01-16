@@ -14,8 +14,15 @@ interface IERC4626 {
 }
 
 contract SwapperTest is Setup {
+    ICurve pool1;
+    ICurve pool2;
+    ERC20 crvusd;
+
     function setUp() public virtual override {
         super.setUp();
+        pool1 = ICurve(swapper.pool1());
+        pool2 = ICurve(swapper.pool2());
+        crvusd = ERC20(tokenAddrs["CRVUSD"]);
     }
 
     function test_setupStrategyOK() public view {
@@ -28,10 +35,9 @@ contract SwapperTest is Setup {
     }
 
     function test_correctAddresses() public view {
-        ICurve pool1 = ICurve(swapper.pool1());
         ERC20 tokenIn = swapper.tokenIn();
         assertEq(address(tokenIn), pool1.coins(swapper.pool1InTokenIdx()));
-        assertEq(swapper.tokenOutPool1(), pool1.coins(swapper.pool1OutTokenIdx()));
+        assertEq(address(swapper.tokenOutPool1()), pool1.coins(swapper.pool1OutTokenIdx()));
     }
 
     function test_swapperOperation() public {
@@ -53,6 +59,7 @@ contract SwapperTest is Setup {
     function test_swapperUpgrade() public {
         // Deploy new swapper
         ISwapper swapper2 = ISwapper(address(new Swapper(
+            management,                    // management
             ERC20(tokenAddrs["CRVUSD"]),   // token in
             ERC20(asset),                 // token out
             ICurve(0xec977F46467a3021785Cff88894886E617abd65b), // pool 1 crvUSD/YB
@@ -90,6 +97,36 @@ contract SwapperTest is Setup {
         console.log('Swap end balance', balance);
         assertGe(amt, 0, "No swap gain");
         assertGe(balance, amt, "No swap gain balance");
+    }
+
+    function test_SwapperMints() public {
+        ERC20 yyb = ERC20(strategy.asset());
+        uint256 ts = yyb.totalSupply();
+        _skewPool(0);
+        deal(address(crvusd), address(this), 10_000e18);
+        crvusd.approve(address(swapper), type(uint256).max);
+        swapper.swap(10_000e18);
+        assertGt(yyb.totalSupply(), ts);
+    }
+
+    function test_OracleEMA() public {
+        uint256 originalPrice = swapper.priceOracle();
+        _skewPool(0);
+        skip(1 days);
+        assertLt(swapper.priceOracle(), originalPrice); // 1 crvUSD can now buy less
+    }
+
+    function _skewPool(uint256 tokenIdxToSell) public {
+        address token = pool2.coins(tokenIdxToSell);
+        uint256 amount = pool2.balances(tokenIdxToSell);
+        deal(token, address(this), amount);
+        ERC20(token).approve(address(pool2), type(uint256).max);
+        pool2.exchange(
+            int128(uint128(tokenIdxToSell)), 
+            tokenIdxToSell == 0 ? int128(1) : int128(0), 
+            amount, 
+            0
+        );
     }
 
 }

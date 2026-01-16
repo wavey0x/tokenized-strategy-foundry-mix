@@ -17,6 +17,9 @@ contract DeploySwapper is Script {
     address constant POOL_CRVUSD_YB = 0xec977F46467a3021785Cff88894886E617abd65b;
     address constant POOL_YB_YYB = 0x5Ee9606e5611Fd6CE14BD2BC12db70BD53dC9daA;
 
+    // Management address
+    address constant MANAGEMENT = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
@@ -26,6 +29,7 @@ contract DeploySwapper is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         Swapper swapper = new Swapper(
+            MANAGEMENT,                         // management
             ERC20(CRVUSD),                      // tokenIn
             ERC20(YYB),                         // tokenOut
             ICurve(POOL_CRVUSD_YB),             // pool1 (crvUSD -> YB)

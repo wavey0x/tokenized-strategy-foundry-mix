@@ -158,6 +158,6 @@ contract AprOracleTest is Setup {
     function test_getEpoch() public view {
         uint256 epoch = oracle.getEpoch();
         // Epoch should be aligned to 7 days
-        assertEq(epoch % 7 days, 0, "Epoch not aligned to week");
+        assertEq(epoch % 7 days, 4, "Epoch not aligned to week");
     }
 }

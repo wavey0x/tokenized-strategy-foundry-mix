@@ -123,6 +123,7 @@ contract Setup is ExtendedTest, IEvents {
         _addLiquidity();
 
         swapper = ISwapper(address(new Swapper(
+            management,                    // management
             ERC20(tokenAddrs["CRVUSD"]),   // token in
             ERC20(asset),                 // token out
             ICurve(0xec977F46467a3021785Cff88894886E617abd65b), // pool 1 crvUSD/YB
