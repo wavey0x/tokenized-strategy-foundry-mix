@@ -7,6 +7,7 @@ import {ICurve} from "../interfaces/curve/ICurve.sol";
 import {ICurveInt128} from "../interfaces/curve/ICurveInt128.sol";
 import {ISwapper} from "../interfaces/utils/ISwapper.sol";
 import {Swapper} from "../periphery/Swapper.sol";
+import {IVaultV2} from "../interfaces/utils/IVaultV2.sol";
 
 interface IERC4626 {
     function asset() external view returns (address);
@@ -17,11 +18,15 @@ contract SwapperTest is Setup {
     ICurve pool1;
     ICurve pool2;
     ERC20 crvusd;
+    ERC20 yb;
+    ERC20 yyb;
 
     function setUp() public virtual override {
         super.setUp();
         pool1 = ICurve(swapper.pool1());
         pool2 = ICurve(swapper.pool2());
+        yb = ERC20(pool2.coins(0));
+        yyb = ERC20(pool2.coins(1));
         crvusd = ERC20(tokenAddrs["CRVUSD"]);
     }
 
@@ -54,6 +59,7 @@ contract SwapperTest is Setup {
         console.log('Swap end balance', balance);
         assertGe(amt, 0, "No swap gain");
         assertGe(balance, amt, "No swap gain balance");
+        _ensureNoBalance();
     }
 
     function test_swapperUpgrade() public {
@@ -97,16 +103,17 @@ contract SwapperTest is Setup {
         console.log('Swap end balance', balance);
         assertGe(amt, 0, "No swap gain");
         assertGe(balance, amt, "No swap gain balance");
+        _ensureNoBalance();
     }
 
     function test_SwapperMints() public {
-        ERC20 yyb = ERC20(strategy.asset());
         uint256 ts = yyb.totalSupply();
         _skewPool(0);
         deal(address(crvusd), address(this), 10_000e18);
         crvusd.approve(address(swapper), type(uint256).max);
         swapper.swap(10_000e18);
         assertGt(yyb.totalSupply(), ts);
+        _ensureNoBalance();
     }
 
     function test_OracleEMA() public {
@@ -127,6 +134,72 @@ contract SwapperTest is Setup {
             amount, 
             0
         );
+    }
+
+    function _ensureNoBalance() public {
+        assertEq(crvusd.balanceOf(address(swapper)), 0);
+        assertEq(yb.balanceOf(address(swapper)), 0);
+        assertEq(yyb.balanceOf(address(swapper)), 0);
+    }
+
+    function test_OtcSwap() public {
+        // Fund swapper with buyToken for OTC
+        uint256 otcFunds = 100_000e18;
+        deal(address(yyb), address(swapper), otcFunds);
+
+        // Enable OTC and whitelist caller
+        vm.prank(swapper.owner());
+        swapper.enableOtc(true);
+        vm.prank(management);
+        swapper.setAllowedSwapper(address(this), true);
+
+        // Calculate expected OTC output
+        uint256 sellAmount = 1_000e18;
+        uint256 price = swapper.priceOracle();
+        uint256 expectedYYB = (sellAmount * price) / 1e18;
+
+        deal(address(crvusd), address(this), sellAmount);
+        crvusd.approve(address(swapper), sellAmount);
+
+        uint256 swapperYYBBefore = yyb.balanceOf(address(swapper));
+        uint256 userYYBBefore = yyb.balanceOf(address(this));
+
+        uint256 amt = swapper.swap(sellAmount);
+
+        uint256 swapperYYBAfter = yyb.balanceOf(address(swapper));
+        uint256 userYYBAfter = yyb.balanceOf(address(this));
+
+        // Verify OTC worked correctly
+        assertEq(userYYBAfter - userYYBBefore, expectedYYB, "User should receive exact OTC amount");
+        assertEq(swapperYYBBefore - swapperYYBAfter, expectedYYB, "Swapper should send exact OTC amount");
+        assertEq(amt, expectedYYB, "Return value should match");
+        assertEq(crvusd.balanceOf(address(swapper)), 0, "crvUSD should be deposited to vault");
+    }
+
+    function test_AccessControl() public {
+        address unauthorized = address(0xBEEF);
+
+        vm.startPrank(unauthorized);
+        vm.expectRevert("!owner");
+        swapper.setVault(IVaultV2(address(0)));
+
+        vm.expectRevert("!ownerOrManagement");
+        swapper.setAllowedSwapper(address(this), true);
+
+        vm.expectRevert("!ownerOrManagement");
+        swapper.setOperator(address(this), true);
+
+        vm.expectRevert("!operator");
+        swapper.enableOtc(true);
+
+        vm.expectRevert("!ownerOrManagement");
+        swapper.sweep(address(crvusd));
+        vm.stopPrank();
+
+        // Verify management can call ownerOrManagement functions
+        vm.prank(management);
+        swapper.setAllowedSwapper(address(this), true);
+        assertTrue(swapper.allowedSwapper(address(this)));
     }
 
 }

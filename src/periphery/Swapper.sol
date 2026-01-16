@@ -148,10 +148,10 @@ contract Swapper {
             // check for vault tokens to withdraw from
             uint256 vaultBalance = approvedVault.balanceOf(address(this));
             if (vaultBalance > amountToBuy) {
-                approvedVault.redeem(amountToBuy, address(this), address(this));
+                approvedVault.withdraw(amountToBuy, address(this), address(this));
             } else {
                 if (vaultBalance > 0) {
-                    approvedVault.withdraw(vaultBalance, address(this), address(this));
+                    approvedVault.redeem(vaultBalance, address(this), address(this));
                     buyTokenBalance = buyToken.balanceOf(address(this));
                 }
                 if (amountToBuy > buyTokenBalance) {
